@@ -45,7 +45,9 @@
 
 #include <stdint.h>
 #include <stddef.h> /* for size_t */
-
+#ifdef LWM2M_SUPPORT_OSCORE
+#include "oscore/oscore.h"
+#endif
 /*
  * The maximum buffer size that is provided for resource responses and must be respected due to the limited IP buffer.
  * Larger data must be handled by the resource and will be sent chunk-wise through a TCP stream or CoAP blocks.
@@ -172,6 +174,9 @@ typedef enum {
   COAP_OPTION_OBSERVE = 6,        /* 0-3 B */
   COAP_OPTION_URI_PORT = 7,       /* 0-2 B */
   COAP_OPTION_LOCATION_PATH = 8,  /* 0-255 B */
+#ifdef LWM2M_SUPPORT_OSCORE
+  COAP_OPTION_OSCORE = 9,         /* 0-255 B */
+#endif
   COAP_OPTION_URI_PATH = 11,      /* 0-255 B */
   COAP_OPTION_CONTENT_TYPE = 12,  /* 0-2 B */
   COAP_OPTION_MAX_AGE = 14,       /* 0-4 B */
@@ -262,6 +267,15 @@ typedef struct {
   uint32_t size;
   multi_option_t *uri_query;
   uint8_t if_none_match;
+
+#ifdef LWM2M_SUPPORT_OSCORE
+   uint8_t const * oscore_partialIV;
+   uint8_t const * oscore_kidContext;
+   uint8_t const * oscore_kid;
+   uint8_t oscore_partialIVLen;
+   uint8_t oscore_kidContextLen;
+   uint8_t oscore_kidLen;
+#endif
 
   uint16_t payload_len;
   uint8_t *payload;

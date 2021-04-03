@@ -595,6 +595,16 @@ size_t coap_serialize_get_size(void *packet)
     {
         length += COAP_MAX_OPTION_HEADER_LEN + coap_pkt->proxy_uri_len;
     }
+#ifdef LWM2M_SUPPORT_OSCORE
+    if (IS_OPTION(coap_pkt, COAP_OPTION_OSCORE))
+    {
+        length += COAP_MAX_OPTION_HEADER_LEN + coap_pkt->oscore_partialIVLen + coap_pkt->oscore_kidContextLen + coap_pkt->oscore_kidLen;
+        length += 1; // header for flagbits
+        if(coap_pkt->oscore_kidContextLen > 0) {
+            length += 1; //s byte for kidcontextlength
+        }
+    }
+#endif
 
     if (coap_pkt->payload_len)
     {
@@ -652,6 +662,9 @@ coap_serialize_message(void *packet, uint8_t *buffer)
   COAP_SERIALIZE_INT_OPTION(    COAP_OPTION_OBSERVE,        observe, "Observe")
   COAP_SERIALIZE_INT_OPTION(    COAP_OPTION_URI_PORT,       uri_port, "Uri-Port")
   COAP_SERIALIZE_MULTI_OPTION(  COAP_OPTION_LOCATION_PATH,  location_path, "Location-Path")
+#ifdef LWM2M_SUPPORT_OSCORE
+  COAP_SERIALIZE_OSCORE_OPTION(COAP_OPTION_OSCORE, "OSCORE")
+#endif
   COAP_SERIALIZE_MULTI_OPTION(  COAP_OPTION_URI_PATH,       uri_path, "Uri-Path")
   COAP_SERIALIZE_INT_OPTION(    COAP_OPTION_CONTENT_TYPE,   content_type, "Content-Format")
   COAP_SERIALIZE_INT_OPTION(    COAP_OPTION_MAX_AGE,        max_age, "Max-Age")
@@ -912,6 +925,16 @@ coap_parse_message(void *packet, uint8_t *data, uint16_t data_len)
         coap_pkt->size = coap_parse_int_option(current_option, option_length);
         PRINTF("Size [%lu]\n", coap_pkt->size);
         break;
+#ifdef LWM2M_SUPPORT_OSCORE
+      case COAP_OPTION_OSCORE:
+        if(coap_parse_oscore_option(coap_pkt, current_option, option_length) != 0){
+            PRINTF("could not parse oscore option value\n");
+            coap_error_message = "Invalid oscore option value";
+            coap_free_header(coap_pkt);
+            return BAD_OPTION_4_02;
+        }
+        break;
+#endif
       default:
         PRINTF("unknown (%u)\n", option_number);
         /* Check if critical (odd) */

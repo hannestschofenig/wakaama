@@ -35,5 +35,8 @@ CU_ErrorCode create_block1_suit();
 #ifdef LWM2M_SUPPORT_SENML_JSON
 CU_ErrorCode create_senml_json_suit();
 #endif
+#ifdef LWM2M_SUPPORT_OSCORE
+CU_ErrorCode create_oscore_suit();
+#endif
 
 #endif /* TESTS_H_ */

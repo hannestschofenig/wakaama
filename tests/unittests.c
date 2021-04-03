@@ -77,6 +77,11 @@ int main()
        goto exit;
 #endif
 
+#ifdef LWM2M_SUPPORT_OSCORE
+   if (CUE_SUCCESS != create_oscore_suit())
+       goto exit;
+#endif
+
    CU_basic_set_mode(CU_BRM_VERBOSE);
    CU_basic_run_tests();
 exit:

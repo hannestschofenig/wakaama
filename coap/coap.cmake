@@ -8,3 +8,16 @@ set(COAP_SOURCES
     ${COAP_SOURCES_DIR}/transaction.c
     ${COAP_SOURCES_DIR}/block.c
     ${COAP_SOURCES_DIR}/er-coap-13/er-coap-13.c)
+
+set(COSE_SOURCES
+    ${COAP_SOURCES_DIR}/cose/cose.c
+    ${COAP_SOURCES_DIR}/cose/cose_encrypt0.c
+    ${COAP_SOURCES_DIR}/cose/cose_header.c
+    ${COAP_SOURCES_DIR}/cose/cose_util.c
+    ${COAP_SOURCES_DIR}/cose/backend/cose_mbedtls.c
+)
+
+set(OSCORE_SOURCES
+    ${COAP_SOURCES_DIR}/oscore/oscore.c
+    ${COSE_SOURCES}
+)

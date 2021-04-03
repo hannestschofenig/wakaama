@@ -12,6 +12,8 @@ if(LWM2M_VERSION VERSION_GREATER "1.0")
     add_definitions(-DLWM2M_SUPPORT_SENML_JSON)
 endif()
 add_definitions(${SHARED_DEFINITIONS} ${WAKAAMA_DEFINITIONS})
+add_definitions(-DLWM2M_SUPPORT_OSCORE)
+add_definitions(-DUSE_CBOR_CONTEXT)
 # Enable all warnings for this test build  
 add_definitions(-pedantic -Wall -Wextra -Wfloat-equal -Wshadow -Wpointer-arith -Wcast-align -Wwrite-strings -Waggregate-return -Wswitch-default)
 
@@ -19,6 +21,9 @@ include_directories (${WAKAAMA_HEADERS_DIR} ${COAP_HEADERS_DIR} ${DATA_HEADERS_D
 set_source_files_properties(${DATA_SOURCES_DIR}/senml_json.c PROPERTIES COMPILE_FLAGS -Wno-float-equal)
 
 file(GLOB SOURCES "*.c")
+enable_testing()
 
-add_executable(${PROJECT_NAME} ${SOURCES} ${WAKAAMA_SOURCES} ${COAP_SOURCES} ${DATA_SOURCES} ${SHARED_SOURCES})
-target_link_libraries(lwm2munittests cunit)
+add_executable(${PROJECT_NAME} ${SOURCES} ${WAKAAMA_SOURCES} ${COAP_SOURCES} ${DATA_SOURCES} ${SHARED_SOURCES} ${OSCORE_SOURCES})
+target_link_libraries(${PROJECT_NAME} cn-cbor::cn-cbor mbedtls)
+target_link_libraries(${PROJECT_NAME} cunit)
+add_test(NAME ${PROJECT_NAME} COMMAND ${PROJECT_NAME})
