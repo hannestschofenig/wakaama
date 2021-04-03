@@ -3,6 +3,9 @@
 
 #include "cn-cbor/cn-cbor.h"
 
+#define COSE_ALGO_HKDF_SHA_256 -10
+#define COSE_ALGO_AES_CCM_16_64_128 0x0A
+
 typedef enum {
     COSE_OK = 0,
     COSE_INVALID_PARAM,

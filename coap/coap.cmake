@@ -19,5 +19,6 @@ set(COSE_SOURCES
 
 set(OSCORE_SOURCES
     ${COAP_SOURCES_DIR}/oscore/oscore.c
+    ${COAP_SOURCES_DIR}/oscore/backend/oscore_mbedtls.c
     ${COSE_SOURCES}
 )

@@ -310,7 +310,7 @@ static void test_oscore_get_size_aad_works() {
     cn_cbor alg;
     memset(&alg, 0, sizeof(cn_cbor));
     alg.type = CN_CBOR_UINT;
-    alg.v.uint = OSCORE_ALGO_AES_CCM_16_64_128;
+    alg.v.uint = COSE_ALGO_AES_CCM_16_64_128;
     uint8_t kid[] = {0x00};
     uint8_t partialIV[] = {0x25};
 
@@ -321,7 +321,7 @@ static void test_oscore_serialize_aad_works() {
     cn_cbor alg;
     memset(&alg, 0, sizeof(cn_cbor));
     alg.type = CN_CBOR_UINT;
-    alg.v.uint = OSCORE_ALGO_AES_CCM_16_64_128;
+    alg.v.uint = COSE_ALGO_AES_CCM_16_64_128;
     uint8_t kid[] = {0x00};
     uint8_t partialIV[] = {0x25};
 
@@ -335,6 +335,401 @@ static void test_oscore_serialize_aad_works() {
 
     CU_ASSERT_EQUAL(oscore_additional_authenticated_data_serialize(aad, sizeof(aad), &alg, kid, sizeof(kid), partialIV, sizeof(partialIV)), 21);
     CU_ASSERT_ARRAY_EQUAL(aad, expectedAAD, sizeof(expectedAAD));
+}
+
+static void test_oscore_context_init_adds_SHA256() {
+    oscore_context_t ctx;
+    oscore_init(&ctx);
+    
+    CU_ASSERT_PTR_NOT_NULL(ctx.hkdf);
+    CU_ASSERT_EQUAL(ctx.hkdf->id.v.sint, -10);
+}
+
+static void test_oscore_context_backend_free_removes_SHA256() {
+    oscore_context_t ctx;
+    oscore_init(&ctx);
+
+    oscore_backend_free(&ctx);
+    
+    CU_ASSERT_PTR_NULL(ctx.hkdf);
+}
+
+static void test_oscore_derive_context_test_vector1_client() {
+    uint8_t const masterSecret[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
+    };
+    uint8_t const masterSalt[] = {
+        0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40
+    };
+
+    uint8_t * senderId = NULL;
+    uint8_t const recipientId[] = {
+        0x01
+    };
+    
+    oscore_context_t ctx;
+    oscore_init(&ctx);
+
+
+    oscore_common_context_t commonCtx;
+    memset(&commonCtx, 0, sizeof(oscore_common_context_t));
+    commonCtx.hkdfAlgId.type = CN_CBOR_INT;
+    commonCtx.hkdfAlgId.v.sint = COSE_ALGO_HKDF_SHA_256;
+    commonCtx.aeadAlgId.type = CN_CBOR_UINT;
+    commonCtx.aeadAlgId.v.uint = COSE_ALGO_AES_CCM_16_64_128;
+    commonCtx.masterSecret = masterSecret;
+    commonCtx.masterSecretLen = sizeof(masterSecret);
+    commonCtx.masterSalt = masterSalt;
+    commonCtx.masterSaltLen = sizeof(masterSalt);
+    commonCtx.senderId = senderId;
+    commonCtx.senderIdLen = 0;
+    commonCtx.recipientId = recipientId;
+    commonCtx.recipientIdLen = sizeof(recipientId);
+
+    uint8_t const expectedSenderKey[16] = {
+        0xf0, 0x91, 0x0e, 0xd7, 0x29, 0x5e, 0x6a, 0xd4,
+        0xb5, 0x4f, 0xc7, 0x93, 0x15, 0x43, 0x02, 0xff
+    };
+    uint8_t const expectedRecipientKey[16] = {
+        0xff, 0xb1, 0x4e, 0x09, 0x3c, 0x94, 0xc9, 0xca,
+        0xc9, 0x47, 0x16, 0x48, 0xb4, 0xf9, 0x87, 0x10
+    };
+    uint8_t const expectedCommonIV[13] = {
+        0x46, 0x22, 0xd4, 0xdd, 0x6d, 0x94, 0x41, 0x68,
+        0xee, 0xfb, 0x54, 0x98, 0x7c
+    };
+
+    oscore_derived_context_t derivedCtx;
+    memset(&derivedCtx, 0, sizeof(oscore_derived_context_t));
+
+    CU_ASSERT_EQUAL(oscore_derive_context(&ctx, &commonCtx, &derivedCtx), 0);
+
+    CU_ASSERT_EQUAL(derivedCtx.keyLen, 16);
+    CU_ASSERT_EQUAL(derivedCtx.nonceLen, 13);
+
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.senderKey, expectedSenderKey, 16);
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.recipientKey, expectedRecipientKey, 16);
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.commonIV, expectedCommonIV, 13);
+
+    oscore_free(&ctx);
+}
+
+static void test_oscore_derive_context_test_vector1_server() {
+    uint8_t const masterSecret[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
+    };
+    uint8_t const masterSalt[] = {
+        0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40
+    };
+
+    uint8_t * recipientId = NULL;
+    uint8_t const senderId[] = {
+        0x01
+    };
+    
+    oscore_context_t ctx;
+    oscore_init(&ctx);
+
+
+    oscore_common_context_t commonCtx;
+    memset(&commonCtx, 0, sizeof(oscore_common_context_t));
+    commonCtx.hkdfAlgId.type = CN_CBOR_INT;
+    commonCtx.hkdfAlgId.v.sint = COSE_ALGO_HKDF_SHA_256;
+    commonCtx.aeadAlgId.type = CN_CBOR_UINT;
+    commonCtx.aeadAlgId.v.uint = COSE_ALGO_AES_CCM_16_64_128;
+    commonCtx.masterSecret = masterSecret;
+    commonCtx.masterSecretLen = sizeof(masterSecret);
+    commonCtx.masterSalt = masterSalt;
+    commonCtx.masterSaltLen = sizeof(masterSalt);
+    commonCtx.senderId = senderId;
+    commonCtx.senderIdLen = sizeof(senderId);
+    commonCtx.recipientId = recipientId;
+    commonCtx.recipientIdLen = 0;
+    
+    uint8_t const expectedRecipientKey[16] = {
+        0xf0, 0x91, 0x0e, 0xd7, 0x29, 0x5e, 0x6a, 0xd4,
+        0xb5, 0x4f, 0xc7, 0x93, 0x15, 0x43, 0x02, 0xff
+    };
+    uint8_t const expectedSenderKey[16] = {
+        0xff, 0xb1, 0x4e, 0x09, 0x3c, 0x94, 0xc9, 0xca,
+        0xc9, 0x47, 0x16, 0x48, 0xb4, 0xf9, 0x87, 0x10
+    };
+    uint8_t const expectedCommonIV[13] = {
+        0x46, 0x22, 0xd4, 0xdd, 0x6d, 0x94, 0x41, 0x68,
+        0xee, 0xfb, 0x54, 0x98, 0x7c
+    };
+
+    oscore_derived_context_t derivedCtx;
+    memset(&derivedCtx, 0, sizeof(oscore_derived_context_t));
+
+    CU_ASSERT_EQUAL(oscore_derive_context(&ctx, &commonCtx, &derivedCtx), 0);
+
+    CU_ASSERT_EQUAL(derivedCtx.keyLen, 16);
+    CU_ASSERT_EQUAL(derivedCtx.nonceLen, 13);
+
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.senderKey, expectedSenderKey, 16);
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.recipientKey, expectedRecipientKey, 16);
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.commonIV, expectedCommonIV, 13);
+
+    oscore_free(&ctx);
+}
+
+static void test_oscore_derive_context_test_vector2_client() {
+    uint8_t const masterSecret[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
+    };
+    uint8_t* masterSalt = NULL;
+
+    uint8_t senderId[] = {
+        0x00
+    };
+    uint8_t const recipientId[] = {
+        0x01
+    };
+    
+    oscore_context_t ctx;
+    oscore_init(&ctx);
+
+
+    oscore_common_context_t commonCtx;
+    memset(&commonCtx, 0, sizeof(oscore_common_context_t));
+    commonCtx.hkdfAlgId.type = CN_CBOR_INT;
+    commonCtx.hkdfAlgId.v.sint = COSE_ALGO_HKDF_SHA_256;
+    commonCtx.aeadAlgId.type = CN_CBOR_UINT;
+    commonCtx.aeadAlgId.v.uint = COSE_ALGO_AES_CCM_16_64_128;
+    commonCtx.masterSecret = masterSecret;
+    commonCtx.masterSecretLen = sizeof(masterSecret);
+    commonCtx.masterSalt = masterSalt;
+    commonCtx.masterSaltLen = 0;
+    commonCtx.senderId = senderId;
+    commonCtx.senderIdLen = sizeof(senderId);
+    commonCtx.recipientId = recipientId;
+    commonCtx.recipientIdLen = sizeof(recipientId);
+
+    uint8_t const expectedSenderKey[16] = {
+        0x32, 0x1b, 0x26, 0x94, 0x32, 0x53, 0xc7, 0xff,
+        0xb6, 0x00, 0x3b, 0x0b, 0x64, 0xd7, 0x40, 0x41
+    };
+    uint8_t const expectedRecipientKey[16] = {
+        0xe5, 0x7b, 0x56, 0x35, 0x81, 0x51, 0x77, 0xcd,
+        0x67, 0x9a, 0xb4, 0xbc, 0xec, 0x9d, 0x7d, 0xda
+    };
+    uint8_t const expectedCommonIV[13] = {
+        0xbe, 0x35, 0xae, 0x29, 0x7d, 0x2d, 0xac, 0xe9,
+        0x10, 0xc5, 0x2e, 0x99, 0xf9
+    };
+
+    oscore_derived_context_t derivedCtx;
+    memset(&derivedCtx, 0, sizeof(oscore_derived_context_t));
+
+    CU_ASSERT_EQUAL(oscore_derive_context(&ctx, &commonCtx, &derivedCtx), 0);
+
+    CU_ASSERT_EQUAL(derivedCtx.keyLen, 16);
+    CU_ASSERT_EQUAL(derivedCtx.nonceLen, 13);
+
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.senderKey, expectedSenderKey, 16);
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.recipientKey, expectedRecipientKey, 16);
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.commonIV, expectedCommonIV, 13);
+
+    oscore_free(&ctx);
+}
+
+static void test_oscore_derive_context_test_vector2_server() {
+    uint8_t const masterSecret[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
+    };
+    uint8_t* masterSalt = NULL;
+
+    uint8_t senderId[] = {
+        0x01
+    };
+    uint8_t const recipientId[] = {
+        0x00
+    };
+    
+    oscore_context_t ctx;
+    oscore_init(&ctx);
+
+
+    oscore_common_context_t commonCtx;
+    memset(&commonCtx, 0, sizeof(oscore_common_context_t));
+    commonCtx.hkdfAlgId.type = CN_CBOR_INT;
+    commonCtx.hkdfAlgId.v.sint = COSE_ALGO_HKDF_SHA_256;
+    commonCtx.aeadAlgId.type = CN_CBOR_UINT;
+    commonCtx.aeadAlgId.v.uint = COSE_ALGO_AES_CCM_16_64_128;
+    commonCtx.masterSecret = masterSecret;
+    commonCtx.masterSecretLen = sizeof(masterSecret);
+    commonCtx.masterSalt = masterSalt;
+    commonCtx.masterSaltLen = 0;
+    commonCtx.senderId = senderId;
+    commonCtx.senderIdLen = sizeof(senderId);
+    commonCtx.recipientId = recipientId;
+    commonCtx.recipientIdLen = sizeof(recipientId);
+
+    uint8_t const expectedRecipientKey[16] = {
+        0x32, 0x1b, 0x26, 0x94, 0x32, 0x53, 0xc7, 0xff,
+        0xb6, 0x00, 0x3b, 0x0b, 0x64, 0xd7, 0x40, 0x41
+    };
+    uint8_t const expectedSenderKey[16] = {
+        0xe5, 0x7b, 0x56, 0x35, 0x81, 0x51, 0x77, 0xcd,
+        0x67, 0x9a, 0xb4, 0xbc, 0xec, 0x9d, 0x7d, 0xda
+    };
+    uint8_t const expectedCommonIV[13] = {
+        0xbe, 0x35, 0xae, 0x29, 0x7d, 0x2d, 0xac, 0xe9,
+        0x10, 0xc5, 0x2e, 0x99, 0xf9
+    };
+
+    oscore_derived_context_t derivedCtx;
+    memset(&derivedCtx, 0, sizeof(oscore_derived_context_t));
+
+    CU_ASSERT_EQUAL(oscore_derive_context(&ctx, &commonCtx, &derivedCtx), 0);
+
+    CU_ASSERT_EQUAL(derivedCtx.keyLen, 16);
+    CU_ASSERT_EQUAL(derivedCtx.nonceLen, 13);
+
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.senderKey, expectedSenderKey, 16);
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.recipientKey, expectedRecipientKey, 16);
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.commonIV, expectedCommonIV, 13);
+
+    oscore_free(&ctx);
+}
+
+static void test_oscore_derive_context_test_vector3_client() {
+    uint8_t const masterSecret[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
+    };
+    uint8_t const masterSalt[] = {
+        0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40
+    };
+
+    uint8_t const idContext[] = {
+        0x37, 0xcb, 0xf3, 0x21, 0x00, 0x17, 0xa2, 0xd3
+    };
+
+    uint8_t * senderId = NULL;
+    uint8_t const recipientId[] = {
+        0x01
+    };
+    
+    oscore_context_t ctx;
+    oscore_init(&ctx);
+
+
+    oscore_common_context_t commonCtx;
+    memset(&commonCtx, 0, sizeof(oscore_common_context_t));
+    commonCtx.hkdfAlgId.type = CN_CBOR_INT;
+    commonCtx.hkdfAlgId.v.sint = COSE_ALGO_HKDF_SHA_256;
+    commonCtx.aeadAlgId.type = CN_CBOR_UINT;
+    commonCtx.aeadAlgId.v.uint = COSE_ALGO_AES_CCM_16_64_128;
+    commonCtx.masterSecret = masterSecret;
+    commonCtx.masterSecretLen = sizeof(masterSecret);
+    commonCtx.masterSalt = masterSalt;
+    commonCtx.masterSaltLen = sizeof(masterSalt);
+    commonCtx.idContext = idContext;
+    commonCtx.idContextLen = sizeof(idContext);
+    commonCtx.senderId = senderId;
+    commonCtx.senderIdLen = 0;
+    commonCtx.recipientId = recipientId;
+    commonCtx.recipientIdLen = sizeof(recipientId);
+
+    uint8_t const expectedSenderKey[16] = {
+        0xaf, 0x2a, 0x13, 0x00, 0xa5, 0xe9, 0x57, 0x88,
+        0xb3, 0x56, 0x33, 0x6e, 0xee, 0xcd, 0x2b, 0x92
+    };
+    uint8_t const expectedRecipientKey[16] = {
+        0xe3, 0x9a, 0x0c, 0x7c, 0x77, 0xb4, 0x3f, 0x03,
+        0xb4, 0xb3, 0x9a, 0xb9, 0xa2, 0x68, 0x69, 0x9f
+    };
+    uint8_t const expectedCommonIV[13] = {
+        0x2c, 0xa5, 0x8f, 0xb8, 0x5f, 0xf1, 0xb8, 0x1c,
+        0x0b, 0x71, 0x81, 0xb8, 0x5e
+    };
+
+    oscore_derived_context_t derivedCtx;
+    memset(&derivedCtx, 0, sizeof(oscore_derived_context_t));
+
+    CU_ASSERT_EQUAL(oscore_derive_context(&ctx, &commonCtx, &derivedCtx), 0);
+
+    CU_ASSERT_EQUAL(derivedCtx.keyLen, 16);
+    CU_ASSERT_EQUAL(derivedCtx.nonceLen, 13);
+
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.senderKey, expectedSenderKey, 16);
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.recipientKey, expectedRecipientKey, 16);
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.commonIV, expectedCommonIV, 13);
+
+    oscore_free(&ctx);
+}
+
+static void test_oscore_derive_context_test_vector3_server() {
+    uint8_t const masterSecret[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
+    };
+    uint8_t const masterSalt[] = {
+        0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40
+    };
+
+    uint8_t const idContext[] = {
+        0x37, 0xcb, 0xf3, 0x21, 0x00, 0x17, 0xa2, 0xd3
+    };
+
+    uint8_t * recipientId = NULL;
+    uint8_t const senderId[] = {
+        0x01
+    };
+    
+    oscore_context_t ctx;
+    oscore_init(&ctx);
+
+
+    oscore_common_context_t commonCtx;
+    memset(&commonCtx, 0, sizeof(oscore_common_context_t));
+    commonCtx.hkdfAlgId.type = CN_CBOR_INT;
+    commonCtx.hkdfAlgId.v.sint = COSE_ALGO_HKDF_SHA_256;
+    commonCtx.aeadAlgId.type = CN_CBOR_UINT;
+    commonCtx.aeadAlgId.v.uint = COSE_ALGO_AES_CCM_16_64_128;
+    commonCtx.masterSecret = masterSecret;
+    commonCtx.masterSecretLen = sizeof(masterSecret);
+    commonCtx.masterSalt = masterSalt;
+    commonCtx.masterSaltLen = sizeof(masterSalt);
+    commonCtx.idContext = idContext;
+    commonCtx.idContextLen = sizeof(idContext);
+    commonCtx.senderId = senderId;
+    commonCtx.senderIdLen = sizeof(senderId);
+    commonCtx.recipientId = recipientId;
+    commonCtx.recipientIdLen = 0;
+
+    uint8_t const expectedRecipientKey[16] = {
+        0xaf, 0x2a, 0x13, 0x00, 0xa5, 0xe9, 0x57, 0x88,
+        0xb3, 0x56, 0x33, 0x6e, 0xee, 0xcd, 0x2b, 0x92
+    };
+    uint8_t const expectedSenderKey[16] = {
+        0xe3, 0x9a, 0x0c, 0x7c, 0x77, 0xb4, 0x3f, 0x03,
+        0xb4, 0xb3, 0x9a, 0xb9, 0xa2, 0x68, 0x69, 0x9f
+    };
+    uint8_t const expectedCommonIV[13] = {
+        0x2c, 0xa5, 0x8f, 0xb8, 0x5f, 0xf1, 0xb8, 0x1c,
+        0x0b, 0x71, 0x81, 0xb8, 0x5e
+    };
+
+    oscore_derived_context_t derivedCtx;
+    memset(&derivedCtx, 0, sizeof(oscore_derived_context_t));
+
+    CU_ASSERT_EQUAL(oscore_derive_context(&ctx, &commonCtx, &derivedCtx), 0);
+
+    CU_ASSERT_EQUAL(derivedCtx.keyLen, 16);
+    CU_ASSERT_EQUAL(derivedCtx.nonceLen, 13);
+
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.senderKey, expectedSenderKey, 16);
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.recipientKey, expectedRecipientKey, 16);
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.commonIV, expectedCommonIV, 13);
+
+    oscore_free(&ctx);
 }
 
 static struct TestTable table[] = {
@@ -360,6 +755,18 @@ static struct TestTable table[] = {
         // additional authenticated data tests
         { "[AAD] AAD size is calculated correctly", test_oscore_get_size_aad_works },
         { "[AAD] AAD serialize works", test_oscore_serialize_aad_works },
+
+        // context tests
+        { "[CTX] backend inits HMAC SHA256 alg", test_oscore_context_init_adds_SHA256 },
+        { "[CTX] backend frees HMAC SHA256 alg", test_oscore_context_backend_free_removes_SHA256 },
+
+        // derive ctx
+        { "[dCTX] test vector 1 client", test_oscore_derive_context_test_vector1_client }, 
+        { "[dCTX] test vector 1 server", test_oscore_derive_context_test_vector1_server },
+        { "[dCTX] test vector 2 client", test_oscore_derive_context_test_vector2_client},
+        { "[dCTX] test vector 2 server", test_oscore_derive_context_test_vector2_server },
+        { "[dCTX] test vector 3 client", test_oscore_derive_context_test_vector3_client},
+        { "[dCTX] test vector 3 server", test_oscore_derive_context_test_vector3_server },
         { NULL, NULL },
 };
 

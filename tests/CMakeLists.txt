@@ -13,6 +13,8 @@ if(LWM2M_VERSION VERSION_GREATER "1.0")
 endif()
 add_definitions(${SHARED_DEFINITIONS} ${WAKAAMA_DEFINITIONS})
 add_definitions(-DLWM2M_SUPPORT_OSCORE)
+add_definitions(-DOSCORE_BACKEND)
+add_definitions(-DCOSE_BACKEND)
 add_definitions(-DUSE_CBOR_CONTEXT)
 # Enable all warnings for this test build  
 add_definitions(-pedantic -Wall -Wextra -Wfloat-equal -Wshadow -Wpointer-arith -Wcast-align -Wwrite-strings -Waggregate-return -Wswitch-default)

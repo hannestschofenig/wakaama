@@ -4,8 +4,6 @@
 #include "cose/cose.h"
 #include "cose/cose_header.h"
 
-#define COSE_ALGO_AES_CCM_16_64_128 0x0A
-
 
 
 

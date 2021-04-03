@@ -1,7 +1,12 @@
 #include "oscore/oscore.h"
+#include "cose/cose_util.h"
 #include "er-coap-13/er-coap-13.h"
+#include "liblwm2m.h"
 #include <string.h>
+#include <assert.h>
 
+#define OSCORE_MALLOC(size) lwm2m_malloc(size)
+#define OSCORE_FREE(ptr) lwm2m_free(ptr)
 
 static void ntworder(uint8_t * buffer, void * insert, size_t const size) {
 #ifdef LWM2M_BIG_ENDIAN
@@ -202,4 +207,241 @@ int oscore_additional_authenticated_data_serialize(uint8_t * buffer, size_t cons
 
     // one byte for cbor bytestring major tag + 11 bytes for ENC Structure
     return aadLen + extraLength + sizeof(prefix);
+}
+
+
+
+static void * oscore_internal_calloc(size_t count, size_t size, void* context) {
+    (void)context;
+    void * ret = lwm2m_malloc(count*size);
+    if(ret != NULL){
+        memset(ret, 0, count*size);
+    }
+    return ret;
+}
+
+static void oscore_internal_free(void*ptr, void *context) {
+    (void)context;
+    lwm2m_free(ptr);
+}
+
+
+
+void oscore_init(oscore_context_t * ctx) {
+    if(ctx != NULL){
+        memset(ctx,0,sizeof(oscore_context_t));
+#ifdef OSCORE_BACKEND
+        oscore_backend_init(ctx);
+#endif
+    cose_init(&ctx->cose, oscore_internal_calloc, oscore_internal_free, NULL);
+    }
+}
+
+void oscore_free(oscore_context_t * ctx) {
+#ifdef OSCORE_BACKEND
+    oscore_backend_free(ctx);
+#endif
+    cose_free(&ctx->cose);
+}
+
+int oscore_hkdf_algorithm_add(oscore_context_t * ctx, oscore_hkdf_alg_t * hkdf) {
+    if(ctx == NULL || hkdf == NULL){
+        return -1;
+    }
+    if(ctx->hkdf == NULL){
+        ctx->hkdf = hkdf;
+        return 0;
+    }
+    assert(hkdf->size <= OSCORE_HKDF_MAXLEN);
+    oscore_hkdf_alg_t * itor = ctx->hkdf;
+    while(itor->next != NULL){
+        if(cbor_is_same(&hkdf->id, &itor->id)) {
+            return -1;
+        }
+        itor = itor->next;
+    }
+    itor->next = hkdf;
+    return 0;
+}
+
+int oscore_hkdf_algorithm_rm(oscore_context_t * ctx, cn_cbor * id, oscore_hkdf_alg_t ** out) {
+    if(ctx == NULL || id == NULL || ctx->hkdf == NULL) {
+        return -1;
+    }
+    if(cbor_is_same(&ctx->hkdf->id, id)) {
+        if(out != NULL){
+            *out = ctx->hkdf;
+        }
+        ctx->hkdf = ctx->hkdf->next;
+        return 0;
+    }
+    if(ctx->hkdf->next == NULL){
+        return -1;
+    }
+    oscore_hkdf_alg_t * itor = ctx->hkdf;
+    while(itor->next != NULL && !cbor_is_same(&itor->next->id, id)) {
+        itor = itor->next;
+    }
+    
+    if(itor->next == NULL){
+        return -1;
+    }
+    if(out != NULL){
+        *out = itor->next;
+    }
+    itor->next = itor->next->next;
+    return 0;
+}
+
+oscore_hkdf_alg_t * oscore_hkdf_algorithm_find(oscore_context_t * ctx, cn_cbor const * id) {
+    if(ctx == NULL || id == NULL) {
+        return NULL;
+    }
+    oscore_hkdf_alg_t * itor = ctx->hkdf;
+    while(itor != NULL) {
+        if(cbor_is_same(&itor->id, id)) {
+            return itor;
+        }
+        itor = itor->next;
+    }
+    return NULL;
+}
+
+
+int oscore_derive_context(oscore_context_t * ctx, oscore_common_context_t const * commonCtx, oscore_derived_context_t * derivedCtx) {
+    if(ctx == NULL || commonCtx == NULL || derivedCtx == NULL){
+        return -1;
+    }
+    uint8_t prk[OSCORE_HKDF_MAXLEN];
+    char const typeKey[] = "Key";
+    char const typeIV[] = "IV";
+
+    oscore_hkdf_alg_t * hkdf = oscore_hkdf_algorithm_find(ctx, &commonCtx->hkdfAlgId);
+    cose_aead_alg_t * aead = cose_aead_algorithm_find(&ctx->cose, &commonCtx->aeadAlgId);
+
+    if(hkdf == NULL || aead == NULL) {
+        LOG("requested HKDF or AEAD algorithm is missing");
+        return -1;
+    }
+
+    derivedCtx->keyLen = aead->keyLen;
+    derivedCtx->nonceLen = aead->nonceMin;
+
+    uint8_t const * salt = commonCtx->masterSalt;
+    size_t const saltLen = commonCtx->masterSaltLen;
+    uint8_t const * ikm = commonCtx->masterSecret; 
+    uint8_t const ikmLen = commonCtx->masterSecretLen;
+    
+    if(hkdf->extract(salt, saltLen, ikm, ikmLen, prk) != 0) {
+        return -1;
+    }
+
+    // calculate maximum length of info
+    int maxInfoLength = 0;
+
+    cn_cbor info;
+    memset(&info, 0, sizeof(cn_cbor));
+    info.type = CN_CBOR_ARRAY;
+    info.flags |= CN_CBOR_FL_COUNT;
+
+    cn_cbor id;
+    memset(&id, 0, sizeof(cn_cbor));
+    id.type = CN_CBOR_BYTES;
+    cn_cbor id_context;
+    memset(&id_context, 0, sizeof(cn_cbor));
+    if(commonCtx->idContext == NULL){
+        id_context.type = CN_CBOR_NULL;
+        maxInfoLength += 1; // cbor null value
+    }
+    else{
+        id_context.type = CN_CBOR_BYTES;
+        id_context.v.bytes = commonCtx->idContext;
+        id_context.length = commonCtx->idContextLen;
+        maxInfoLength += 3 + commonCtx->idContextLen; // cbor bytestring + 2 bytes for length
+    }
+    cn_cbor type;
+    memset(&type, 0, sizeof(cn_cbor));
+    type.type = CN_CBOR_TEXT;
+    cn_cbor L;
+    memset(&L, 0, sizeof(cn_cbor));
+    L.type = CN_CBOR_UINT;
+
+    cn_cbor_array_append(&info, &id, NULL);
+    cn_cbor_array_append(&info, &id_context, NULL);
+    cn_cbor_array_append(&info, (cn_cbor*)&commonCtx->aeadAlgId, NULL);
+    cn_cbor_array_append(&info, &type, NULL);
+    cn_cbor_array_append(&info, &L, NULL);
+
+    
+    if(commonCtx->senderIdLen > commonCtx->recipientIdLen){
+        maxInfoLength += 3 + commonCtx->senderIdLen; // cbor bytestring + 2 bytes for length
+    }
+    else {
+        maxInfoLength += 3 + commonCtx->recipientIdLen;
+    }
+    maxInfoLength += 9; // cbor encoded aead alg (currently no string algorithms are defined, int value algorithms should be less than 2^32)
+    maxInfoLength += 4; // cbor encoded type
+    maxInfoLength += 2; // cbor encoded L (all known keylength or noncelength are less than 255 until now)
+    maxInfoLength += 1; // cbor encoded array type with 5 elements
+    
+    uint8_t * serializedInfo = OSCORE_MALLOC(maxInfoLength);
+    if(serializedInfo == NULL){
+        LOG("Out of memory");
+        return -1;
+    }
+
+    // set info for sender key
+    id.v.bytes = commonCtx->senderId;
+    id.length = commonCtx->senderIdLen;
+    type.v.str = typeKey;
+    type.length = 3;
+    L.v.uint = derivedCtx->keyLen;
+    
+    int ret = cn_cbor_encoder_write(serializedInfo, 0, maxInfoLength, &info);
+    if(ret < 0){
+        LOG("Could not serialize cbor of info. Maybe invalid buffer size?")
+        OSCORE_FREE(serializedInfo);
+        return -1;
+    }
+
+    if(hkdf->expand(prk, hkdf->size, serializedInfo, ret, derivedCtx->senderKey, derivedCtx->keyLen) != 0) {
+        OSCORE_FREE(serializedInfo);
+        return -1;
+    }
+
+    // set info for recipient key
+    id.v.bytes = commonCtx->recipientId;
+    id.length = commonCtx->recipientIdLen;
+
+    ret = cn_cbor_encoder_write(serializedInfo, 0, maxInfoLength, &info);
+    if(ret < 0){
+        OSCORE_FREE(serializedInfo);
+        return -1;
+    }
+
+    if(hkdf->expand(prk, hkdf->size, serializedInfo, ret, derivedCtx->recipientKey, derivedCtx->keyLen) != 0) {
+        OSCORE_FREE(serializedInfo);
+        return -1;
+    }
+
+    // set info for recipient key
+    id.v.bytes = NULL;
+    id.length = 0;
+    type.v.str = typeIV;
+    type.length = 2;
+    L.v.uint = derivedCtx->nonceLen;
+
+    ret = cn_cbor_encoder_write(serializedInfo, 0, maxInfoLength, &info);
+    if(ret < 0){
+        OSCORE_FREE(serializedInfo);
+        return -1;
+    }
+
+    if(hkdf->expand(prk, hkdf->size, serializedInfo, ret, derivedCtx->commonIV, derivedCtx->nonceLen) != 0) {
+        OSCORE_FREE(serializedInfo);
+        return -1;
+    }
+    OSCORE_FREE(serializedInfo);
+
+    return 0;
 }

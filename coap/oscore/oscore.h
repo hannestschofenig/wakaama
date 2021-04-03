@@ -1,12 +1,12 @@
 #ifndef OSCORE_H_
 #define OSCORE_H_
 #include <stdint.h>
+#include "cose/cose.h"
 #include "cn-cbor/cn-cbor.h"
+#include "oscore/oscore_config.h"
 
 #define OSCORE_PARTIALIV_MAXLEN 5
 #define OSCORE_OPTION_VALUE_MAXLEN 255
-
-#define OSCORE_ALGO_AES_CCM_16_64_128 0x0A
 
 #define COAP_SERIALIZE_OSCORE_OPTION(number, text)      \
     if (IS_OPTION(coap_pkt, number)) \
@@ -52,5 +52,68 @@ int oscore_additional_authenticated_data_get_size(cn_cbor const * algorithms, ui
 
 // use oscore_additional_authenticated_data_get_size to precalculate size
 int oscore_additional_authenticated_data_serialize(uint8_t * buffer, size_t const length, cn_cbor const * algorithms, uint8_t const * kid, uint8_t const kidLen, uint8_t const * partialIV, uint8_t const partialIVLen);
+
+typedef int (*oscore_hkdf_extract_func)(uint8_t const * salt, size_t saltLen, uint8_t const * ikm, size_t ikmLen, uint8_t * okm);
+typedef int (*oscore_hkdf_expand_func)(uint8_t const * prk, size_t prkLen, uint8_t const * info, size_t infoLen, uint8_t * okm, size_t okmLen);
+
+typedef struct oscore_hkdf_alg {
+    struct oscore_hkdf_alg * next;
+    cn_cbor id;
+    // size of key in bytes
+    size_t size;
+    oscore_hkdf_extract_func extract;
+    oscore_hkdf_expand_func expand;
+} oscore_hkdf_alg_t;
+
+
+typedef struct oscore_common_context {
+    // use uint16_t for length to prevent failure
+    // common context
+    uint8_t const * masterSecret;
+    uint16_t masterSecretLen;
+    uint8_t const * masterSalt;
+    uint16_t masterSaltLen;
+    uint8_t const * idContext;
+    uint16_t idContextLen;
+    cn_cbor hkdfAlgId;
+    cn_cbor aeadAlgId;
+    
+    uint8_t const * senderId;
+    uint16_t senderIdLen;
+    uint8_t const * recipientId;
+    uint16_t recipientIdLen;
+    //TODO add replay window
+} oscore_common_context_t;
+
+typedef struct oscore_derived_context {
+    // derived context
+    // keylen is specified by aeadAlg
+    uint8_t senderKey[OSCORE_MAXKEYLEN];
+    uint8_t recipientKey[OSCORE_MAXNONCELEN];
+    size_t keyLen;
+    // nonceLen is specified by aeadAlg
+    uint8_t commonIV[OSCORE_MAXNONCELEN];
+    size_t nonceLen;
+} oscore_derived_context_t;
+
+typedef struct oscore_context {
+    cose_context_t cose;
+    oscore_hkdf_alg_t * hkdf;
+    
+} oscore_context_t;
+
+void oscore_init(oscore_context_t * ctx);
+void oscore_free(oscore_context_t * ctx);
+
+#ifdef OSCORE_BACKEND
+void oscore_backend_init(oscore_context_t * ctx);
+void oscore_backend_free(oscore_context_t * ctx);
+#endif
+
+int oscore_hkdf_algorithm_add(oscore_context_t * ctx, oscore_hkdf_alg_t * hkdf);
+oscore_hkdf_alg_t * oscore_hkdf_algorithm_find(oscore_context_t * ctx, cn_cbor const * id);
+int oscore_hkdf_algorithm_rm(oscore_context_t * ctx, cn_cbor * id, oscore_hkdf_alg_t ** hkdf);
+
+int oscore_derive_context(oscore_context_t * ctx, oscore_common_context_t const * commonCtx, oscore_derived_context_t * derivedCtx);
 
 #endif

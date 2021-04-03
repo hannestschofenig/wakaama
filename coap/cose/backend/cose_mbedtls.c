@@ -10,6 +10,7 @@
 
 
 static cose_error_t mbedtls_aes_ccm_16_64_128_encrypt(cose_aead_parameters_t const * par, cose_header_map_t const * header_map, uint8_t * output) {
+    (void)header_map;
     mbedtls_ccm_context ccmCtx;
 
     mbedtls_ccm_init(&ccmCtx);
@@ -28,6 +29,7 @@ static cose_error_t mbedtls_aes_ccm_16_64_128_encrypt(cose_aead_parameters_t con
 }
 
 static cose_error_t mbedtls_aes_ccm_16_64_128_decrypt(cose_aead_parameters_t * par, cose_header_map_t const * header_map, uint8_t const * encryptedBuffer, size_t const length) {
+    (void)header_map;
     mbedtls_ccm_context ccmCtx;
 
     mbedtls_ccm_init(&ccmCtx);

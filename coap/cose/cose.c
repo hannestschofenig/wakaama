@@ -16,6 +16,9 @@ cose_error_t cose_init(cose_context_t * context, cose_calloc_func_t calloc_func,
     context->calloc_func = calloc_func;
     context->free_func = free_func;
     context->userContext = userContext;
+#ifdef COSE_BACKEND
+    cose_backend_init(context);
+#endif
     return COSE_OK;
 }
 
