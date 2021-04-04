@@ -496,8 +496,6 @@ static coap_option_t const OSCORE_E_OPTIONS[] = {
     COAP_OPTION_BLOCK1,
 };
 
-#define REMOVE_OPTION(packet, opt) (packet)->options[opt / OPTION_MAP_SIZE] &= ((0xFF) ^ (1 << (opt % OPTION_MAP_SIZE)))
-
 static coap_option_t oscore_internal_get_next_EOption(coap_packet_t * packet) {
     for(size_t i = 0; i < sizeof(OSCORE_E_OPTIONS); i++) {
         if(IS_OPTION(packet, OSCORE_E_OPTIONS[i])) {
@@ -528,7 +526,7 @@ static int oscore_move_EOptions(coap_packet_t * unprotected, coap_packet_t * pro
     return 0;
 }
 
-int oscore_message_transform(oscore_context_t * ctx, oscore_sender_context_t * sender, oscore_message_t * msg) {
+int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sender, oscore_message_t * msg) {
     if(ctx == NULL || sender == NULL || msg == NULL) {
         return -1;
     }
@@ -539,8 +537,6 @@ int oscore_message_transform(oscore_context_t * ctx, oscore_sender_context_t * s
     size_t requestPIVLen = msg->partialIVLen;
     memcpy(requestPIV, msg->partialIV, msg->partialIVLen);
 
-    uint8_t const * id;
-    size_t idLen = 0;
     coap_packet_t * oscore = (coap_packet_t *)msg->packet;
     coap_packet_t coap_pkt;
     bool isResponse = false;
@@ -551,16 +547,7 @@ int oscore_message_transform(oscore_context_t * ctx, oscore_sender_context_t * s
         isResponse = true;
     }
 
-    if(!isResponse || msg->generatePartialIV) {
-        id = sender->senderId;
-        idLen = sender->senderIdLen;
-    }
-    else {
-        id = msg->id;
-        idLen = msg->idLen;
-    }
-
-    if(!isResponse || msg->generatePartialIV) { // partial IV must not be calculated
+    if(!isResponse || msg->generatePartialIV) { // partial IV must be calculated
         if(sender->senderSequenceNumber > OSCORE_SENDERSEQUENCENUMBER_MAX) {
             LOG("Sender sequence number out of range");
             return -1;
@@ -581,7 +568,14 @@ int oscore_message_transform(oscore_context_t * ctx, oscore_sender_context_t * s
     
     uint8_t nonce[OSCORE_MAXNONCELEN];
     int ret = 0;
-    ret = oscore_derive_nonce(id, idLen, sender->commonIV, sender->nonceLen, msg->partialIV, msg->partialIVLen, nonce);
+
+    if(!isResponse || msg->generatePartialIV) { // use sender id
+        ret = oscore_derive_nonce(sender->senderId, sender->senderIdLen, sender->commonIV, sender->nonceLen, msg->partialIV, msg->partialIVLen, nonce);
+    }
+    else { // use recipient id
+        ret = oscore_derive_nonce(msg->id, msg->idLen, sender->commonIV, sender->nonceLen, msg->partialIV, msg->partialIVLen, nonce);
+    }
+    
     if(ret < 0) {
         return -1;
     }
@@ -684,15 +678,52 @@ int oscore_message_transform(oscore_context_t * ctx, oscore_sender_context_t * s
             sender->senderSequenceNumber++;
         }
         else{
-            coap_set_header_oscore(oscore, NULL, 0, sender->idContext, sender->idContextLen, NULL, 0);
+            coap_set_header_oscore(oscore, NULL, 0, NULL, 0, NULL, 0);
         }
         
     }
     else {
-        coap_set_header_oscore(oscore, msg->partialIV, msg->partialIVLen, sender->idContext, sender->idContextLen, sender->senderId, sender->senderIdLen);
+        uint8_t const * senderId = OSCORE_EMPTY_ENTRY;
+        size_t senderIdLen = 0;
+        if(sender->senderId != NULL && sender->senderIdLen > 0) {
+            senderId = sender->senderId;
+            senderIdLen = sender->senderIdLen;
+        }
+        coap_set_header_oscore(oscore, msg->partialIV, msg->partialIVLen, sender->idContext, sender->idContextLen, senderId, senderIdLen);
         sender->senderSequenceNumber++;
     }
     
     
     return 0;
+}
+
+int oscore_add_recipient(oscore_context_t * ctx, oscore_common_context_t const * commonCtx, oscore_derived_context_t const * derivedCtx, oscore_recipient_context_t * recipient) {
+    return -1;
+}
+
+oscore_recipient_context_t * oscore_find_recipient(oscore_recipient_context_t * begin, uint8_t const * id, size_t idLen, uint8_t const * idContext, size_t idContextLen) {
+    return NULL;
+}
+
+
+
+int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg, uint8_t * input, size_t const length) {
+    // remove all outer options which are class E
+
+    // get recipient data of oscore option value
+
+    // get recipient context based on id and id context
+
+    // verify replay window
+
+    // compose AAD
+
+    // compute nonce
+
+    // decrypt
+
+    // update replay window
+
+    // update coap msg with decrypted information
+    return -1;
 }

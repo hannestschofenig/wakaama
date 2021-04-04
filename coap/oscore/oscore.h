@@ -12,6 +12,9 @@
 #define OSCORE_SENDERSEQUENCENUMBER_MAX (uint64_t)((uint64_t)(1) << 40)
 #define OSCORE_OPTION_VALUE_MAXLEN 255
 
+// special ptr to serialize empty id in option value
+#define OSCORE_EMPTY_ENTRY (void*)0xFF
+
 #define COAP_SERIALIZE_OSCORE_OPTION(number, text)      \
     if (IS_OPTION(coap_pkt, number)) \
     { \
@@ -87,16 +90,37 @@ typedef struct oscore_derived_context {
     // derived context
     // keylen is specified by aeadAlg
     uint8_t senderKey[OSCORE_MAXKEYLEN];
-    uint8_t recipientKey[OSCORE_MAXNONCELEN];
+    uint8_t recipientKey[OSCORE_MAXKEYLEN];
     size_t keyLen;
     // nonceLen is specified by aeadAlg
     uint8_t commonIV[OSCORE_MAXNONCELEN];
     size_t nonceLen;
 } oscore_derived_context_t;
 
+typedef struct oscore_recipient_context {
+    struct oscore_recipient_context * next;
+    // from common context
+    uint8_t const * recipientId;
+    uint16_t recipientIdLen;
+    uint8_t const * idContext;
+    size_t idContextLen;
+    cn_cbor const * aeadAlgId;
+
+    // from derived context
+    uint8_t const * recipientKey;
+    size_t recipientKeyLen;
+    uint8_t const * commonIV;
+    size_t nonceLen;
+
+    // replay window
+    uint64_t highestValidatedSequenceNumber;
+    uint32_t replayWindow;
+} oscore_recipient_context_t;
+
 typedef struct oscore_context {
     cose_context_t cose;
     oscore_hkdf_alg_t * hkdf;
+    oscore_recipient_context_t * recipient;
     
 } oscore_context_t;
 
@@ -131,9 +155,10 @@ int oscore_hkdf_algorithm_rm(oscore_context_t * ctx, cn_cbor * id, oscore_hkdf_a
 int oscore_derive_context(oscore_context_t * ctx, oscore_common_context_t const * commonCtx, oscore_derived_context_t * derivedCtx);
 // nonce must be a buffer with commonIVLen
 int oscore_derive_nonce(uint8_t const * id, size_t idLen, uint8_t const * commonIV, size_t commonIVLen, uint8_t const * partialIV, size_t partialIVLen, uint8_t * nonce);
-
-
-
+// populates recipientctx and adds it to oscore context
+int oscore_add_recipient(oscore_context_t * ctx, oscore_common_context_t const * commonCtx, oscore_derived_context_t const * derivedCtx, oscore_recipient_context_t * recipient);
+// finds a recipient context in the list
+oscore_recipient_context_t * oscore_find_recipient(oscore_recipient_context_t * begin, uint8_t const * id, size_t idLen, uint8_t const * idContext, size_t idContextLen);
 
 typedef struct oscore_sender_context {
     // from common context
@@ -154,21 +179,30 @@ typedef struct oscore_sender_context {
 } oscore_sender_context_t;
 
 typedef struct oscore_message {
-    void * packet; // coap packet
+    void * packet; // coap msg
 
-    // populate with request id if response
     uint8_t const * id;
     uint16_t idLen;
 
-    // prepopulate partialIV with request partial IV if response
     uint8_t partialIV[8];
     size_t partialIVLen;
-
+    
     bool generatePartialIV;
 } oscore_message_t;
 
 // Message
 // keep in mind that payload of msg->packet will be overriden, save it if it must be freed afterwards
+// populate with request id if response
+// prepopulate partialIV with partial IV of request if message is a response
+// set this flag to true if a new partial IV should be generated for response
 // new payload will be allocated with OSCORE_MALLOC!
-int oscore_message_transform(oscore_context_t * ctx, oscore_sender_context_t * sender, oscore_message_t * msg);
+int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sender, oscore_message_t * msg);
+
+#define OSCORE_DECOMPRESS_FAILED -2
+#define OSCORE_COULD_NOT_FIND_RECIPIENT -3
+#define OSCORE_VERIFICATION_FAILED -4
+// prepoulate packet of msg with a ptr to a coap_structure
+// populates id, partialIV of msg
+// verifies and updates recipient context replay window
+int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg, uint8_t * input, size_t const length);
 #endif

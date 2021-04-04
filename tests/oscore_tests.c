@@ -153,17 +153,99 @@ static void test_oscore_serialize_option_kid_correctly() {
     }
 }
 
-// RFC8613 6.3.Examples of Compressed COSE Objects Example 4 -> leads to empty option value
-static void test_oscore_serialize_option_with_empty_value() {
+// RFC8613 6.3.Examples of Compressed COSE Objects Example 1
+static void test_oscore_option_example1() {
+    coap_packet_t packet;
+    coap_init_message(&packet, COAP_TYPE_CON, COAP_GET, 0x1234);
+    uint8_t const kid[] = {
+        0x25
+    };
+    uint8_t const partialIV[] = {
+        0x05
+    };
+    coap_set_header_oscore(&packet, partialIV, sizeof(partialIV), NULL, 0, kid, sizeof(kid));
+
+    
+    uint8_t const expectedmessage[] =  {0x40, COAP_GET, 0x12, 0x34,
+                                        0x93,
+                                        0x09, 0x05, 0x25};
+    uint8_t message[sizeof(expectedmessage)];
+
+    CU_ASSERT_EQUAL(coap_serialize_message(&packet, message), sizeof(expectedmessage));
+    CU_ASSERT_ARRAY_EQUAL(message, expectedmessage, sizeof(expectedmessage));
+}
+
+// RFC8613 6.3.Examples of Compressed COSE Objects Example 2
+static void test_oscore_option_example2() {
+    coap_packet_t packet;
+    coap_init_message(&packet, COAP_TYPE_CON, COAP_GET, 0x1234);
+    uint8_t const partialIV[] = {
+        0x00
+    };
+    coap_set_header_oscore(&packet, partialIV, sizeof(partialIV), NULL, 0, OSCORE_EMPTY_ENTRY, 0);
+
+    
+    uint8_t const expectedmessage[] =  {0x40, COAP_GET, 0x12, 0x34,
+                                        0x92,
+                                        0x09, 0x00};
+    uint8_t message[sizeof(expectedmessage)];
+
+    CU_ASSERT_EQUAL(coap_serialize_message(&packet, message), sizeof(expectedmessage));
+    CU_ASSERT_ARRAY_EQUAL(message, expectedmessage, sizeof(expectedmessage));
+}
+
+// RFC8613 6.3.Examples of Compressed COSE Objects Example 3
+static void test_oscore_option_example3() {
+    coap_packet_t packet;
+    coap_init_message(&packet, COAP_TYPE_CON, COAP_GET, 0x1234);
+
+    uint8_t const partialIV[] = {
+        0x05
+    };
+    uint8_t const kidContext[] = {
+        0x44, 0x61, 0x6c, 0x65, 0x6b
+    };
+    coap_set_header_oscore(&packet, partialIV, sizeof(partialIV), kidContext, sizeof(kidContext), OSCORE_EMPTY_ENTRY, 0);
+
+    
+    uint8_t const expectedmessage[] =  {0x40, COAP_GET, 0x12, 0x34,
+                                        0x98,
+                                        0x19, 0x05, 0x05, 0x44, 0x61, 0x6c, 0x65, 0x6b};
+    uint8_t message[sizeof(expectedmessage)];
+
+    CU_ASSERT_EQUAL(coap_serialize_message(&packet, message), sizeof(expectedmessage));
+    CU_ASSERT_ARRAY_EQUAL(message, expectedmessage, sizeof(expectedmessage));
+}
+
+// RFC8613 6.3.Examples of Compressed COSE Objects Example 4 
+static void test_oscore_option_example4() {
     coap_packet_t packet;
     coap_init_message(&packet, COAP_TYPE_CON, COAP_GET, 0x1234);
     coap_set_header_oscore(&packet, NULL, 0, NULL, 0, NULL, 0);
     uint8_t const expectedmessage[] =  {0x40, COAP_GET, 0x12, 0x34,
                                         0x90};
 
-    uint8_t message[5];
-    CU_ASSERT_EQUAL(coap_serialize_message(&packet, message), 5);
+    uint8_t message[sizeof(expectedmessage)];
 
+    CU_ASSERT_EQUAL(coap_serialize_message(&packet, message), sizeof(expectedmessage));
+    CU_ASSERT_ARRAY_EQUAL(message, expectedmessage, sizeof(expectedmessage));
+}
+
+// RFC8613 6.3.Examples of Compressed COSE Objects Example 5 
+static void test_oscore_option_example5() {
+    coap_packet_t packet;
+    coap_init_message(&packet, COAP_TYPE_CON, COAP_GET, 0x1234);
+    uint8_t const partialIV[] = {
+        0x07
+    };
+    coap_set_header_oscore(&packet, partialIV, 1, NULL, 0, NULL, 0);
+    uint8_t const expectedmessage[] =  {0x40, COAP_GET, 0x12, 0x34,
+                                        0x92,
+                                        0x01, 0x07};
+
+    uint8_t message[sizeof(expectedmessage)];
+
+    CU_ASSERT_EQUAL(coap_serialize_message(&packet, message), sizeof(expectedmessage));
     CU_ASSERT_ARRAY_EQUAL(message, expectedmessage, sizeof(expectedmessage));
 }
 
@@ -838,7 +920,6 @@ static void test_oscore_message_test_vector4_request_client() {
 
     oscore_sender_context_t sender;
     memset(&sender, 0, sizeof(oscore_sender_context_t));
-    sender.senderId = (uint8_t*)0x01; // wont be dereferenced when senderIdLen = 0
     sender.senderIdLen = 0;
     sender.senderKey = senderKey;
     sender.senderKeyLen = sizeof(senderKey);
@@ -865,7 +946,7 @@ static void test_oscore_message_test_vector4_request_client() {
         0x77, 0x6f, 0x1c, 0x16, 0x68, 0xb3, 0x82, 0x5e
     };
 
-    CU_ASSERT_EQUAL(oscore_message_transform(&ctx, &sender, &oscore_msg), 0);
+    CU_ASSERT_EQUAL(oscore_message_encrypt(&ctx, &sender, &oscore_msg), 0);
 
     CU_ASSERT_EQUAL(coap_serialize_message(&coap_msg, serializedOscore), 35);
 
@@ -935,7 +1016,7 @@ static void test_oscore_message_test_vector5_request_client() {
         0x73, 0x1f, 0xff, 0xb0
     };
 
-    CU_ASSERT_EQUAL(oscore_message_transform(&ctx, &sender, &oscore_msg), 0);
+    CU_ASSERT_EQUAL(oscore_message_encrypt(&ctx, &sender, &oscore_msg), 0);
 
     CU_ASSERT_EQUAL(coap_serialize_message(&coap_msg, serializedOscore), 36);
 
@@ -977,7 +1058,6 @@ static void test_oscore_message_test_vector6_request_client() {
 
     oscore_sender_context_t sender;
     memset(&sender, 0, sizeof(oscore_sender_context_t));
-    sender.senderId = (uint8_t*)0x01; // wont be dereferenced when senderIdLen = 0
     sender.senderIdLen = 0;
     sender.idContext = idContext;
     sender.idContextLen = sizeof(idContext);
@@ -1008,7 +1088,7 @@ static void test_oscore_message_test_vector6_request_client() {
         0xff, 0xbe, 0x55, 0xc3
     };
 
-    CU_ASSERT_EQUAL(oscore_message_transform(&ctx, &sender, &oscore_msg), 0);
+    CU_ASSERT_EQUAL(oscore_message_encrypt(&ctx, &sender, &oscore_msg), 0);
 
     CU_ASSERT_EQUAL(coap_serialize_message(&coap_msg, serializedOscore), 44);
 
@@ -1083,7 +1163,7 @@ static void test_oscore_message_test_vector7_response_server() {
         0x83, 0x03, 0xcd, 0xaf, 0xae, 0x11, 0x91, 0x06
     };
 
-    CU_ASSERT_EQUAL(oscore_message_transform(&ctx, &sender, &oscore_msg), 0);
+    CU_ASSERT_EQUAL(oscore_message_encrypt(&ctx, &sender, &oscore_msg), 0);
 
     CU_ASSERT_EQUAL(coap_serialize_message(&coap_msg, serializedOscore), 32);
 
@@ -1159,15 +1239,8 @@ static void test_oscore_message_test_vector8_response_server() {
         0xf8, 0x8e
     };
 
-    CU_ASSERT_EQUAL(oscore_message_transform(&ctx, &sender, &oscore_msg), 0);
-    int ret = coap_serialize_message(&coap_msg, serializedOscore);
+    CU_ASSERT_EQUAL(oscore_message_encrypt(&ctx, &sender, &oscore_msg), 0);
     CU_ASSERT_EQUAL(coap_serialize_message(&coap_msg, serializedOscore), 34);
-
-    for(size_t i = 0; i < sizeof(expectedOscore); i++) {
-        if(serializedOscore[i]!=expectedOscore[i]) {
-            printf("test");
-        }
-    }
 
     CU_ASSERT_ARRAY_EQUAL(serializedOscore, expectedOscore, 34);
     OSCORE_FREE(coap_msg.payload);
@@ -1184,7 +1257,13 @@ static struct TestTable table[] = {
         { "[OPTION] serializes partial IV correctly in option", test_oscore_serialize_option_partialIV_correctly },
         { "[OPTION] serializes kidContext correctly in option", test_oscore_serialize_option_kidContext_correctly },
         { "[OPTION] serializes kid correctly in option", test_oscore_serialize_option_kid_correctly },
-        { "[OPTION] serializes option with no information to empty value", test_oscore_serialize_option_with_empty_value},
+         // RFC Option Value examples
+        { "[OPTION] header compression example 1", test_oscore_option_example1 },
+        { "[OPTION] header compression example 2", test_oscore_option_example2 },
+        { "[OPTION] header compression example 3", test_oscore_option_example3 },
+        { "[OPTION] header compression example 4", test_oscore_option_example4 },
+        { "[OPTION] header compression example 5", test_oscore_option_example5 },
+
         { "[OPTION] serializes option correctly", test_oscore_serialize_option_correctly },
         { "[OPTION] parse option with s=0 works", test_oscore_parse_option_with_s0_works },
         { "[OPTION] parse option with invalid encoding returns error", test_oscore_parse_option_with_invalid_encoding_returns_error },
