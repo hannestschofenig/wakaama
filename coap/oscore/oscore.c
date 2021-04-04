@@ -70,7 +70,7 @@ int coap_parse_oscore_option(void * packet, uint8_t const * value, uint32_t cons
         return BAD_OPTION_4_02;
     }
     coap_pkt->oscore_partialIVLen = (value[0] & 0x7);
-    if(optionLength < coap_pkt->oscore_partialIVLen + 1) {
+    if(optionLength < (uint32_t)(coap_pkt->oscore_partialIVLen + 1)) {
         return BAD_OPTION_4_02;
     }
     kidLen -= coap_pkt->oscore_partialIVLen;
@@ -531,6 +531,14 @@ int oscore_message_setup(oscore_context_t * ctx, oscore_sender_context_t * sende
     if(ctx == NULL || sender == NULL || msg == NULL) {
         return -1;
     }
+    memset(msg->partialIV, 0, 8);
+    ntworder(msg->partialIV, &sender->senderSequenceNumber, 8);
+    for(int i = 7; i >= 0; i--) {
+        if(msg->partialIV[i] != 0) {
+            msg->partialIVLen = 8 - i;
+        }
+    }
+    memmove(msg->partialIV, msg->partialIV+8-msg->partialIVLen, msg->partialIVLen);
     uint8_t nonce[OSCORE_MAXNONCELEN];
     int ret = oscore_derive_nonce(sender->senderId, sender->senderIdLen, sender->commonIV, sender->nonceLen, msg->partialIV, msg->partialIVLen, nonce);
     if(ret < 0) {
@@ -590,7 +598,7 @@ int oscore_message_setup(oscore_context_t * ctx, oscore_sender_context_t * sende
     cose_aead_parameters_t parameters;
     parameters.plaintext = serializedCoap;
     parameters.plaintextLen = sizeCoap;
-    parameters.key.key = sender->senderKey;
+    parameters.key.key = (uint8_t*)sender->senderKey;
     parameters.key.keyLen = sender->senderKeyLen;
     parameters.nonce = nonce;
     parameters.nonceLen = sender->nonceLen;
@@ -616,11 +624,6 @@ int oscore_message_setup(oscore_context_t * ctx, oscore_sender_context_t * sende
     
     coap_set_payload(oscore, out, parameters.plaintextLen + aead->relatingCipherTextLen);
     coap_set_header_oscore(oscore, msg->partialIV, msg->partialIVLen, sender->idContext, sender->idContextLen, sender->senderId, sender->senderIdLen);
-    ret = coap_serialize_get_size(oscore);
-    if(ret < 0){
-        LOG("Could not get size of serialized coap package");
-        return -1;
-    }
-
+    sender->senderSequenceNumber++;
     return 0;
 }

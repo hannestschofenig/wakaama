@@ -154,7 +154,7 @@ typedef struct oscore_sender_context {
 
 typedef struct oscore_message {
     void * packet; // coap packet
-    uint8_t * partialIV;
+    uint8_t partialIV[8];
     size_t partialIVLen;
 } oscore_message_t;
 

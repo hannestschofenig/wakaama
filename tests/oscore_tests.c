@@ -828,10 +828,6 @@ static void test_oscore_message_test_vector4_request_client() {
         0xee, 0xfb, 0x54, 0x98, 0x7c
     };
 
-    uint8_t const partialIV[1] = {
-        0x14
-    };
-
     cn_cbor aeadAlg;
     memset(&aeadAlg, 0, sizeof(cn_cbor));
     aeadAlg.type = CN_CBOR_UINT;
@@ -861,8 +857,6 @@ static void test_oscore_message_test_vector4_request_client() {
     oscore_message_t oscore_msg;
     memset(&oscore_msg, 0, sizeof(oscore_message_t));
     oscore_msg.packet = &coap_msg;
-    oscore_msg.partialIV = partialIV;
-    oscore_msg.partialIVLen = sizeof(partialIV);
 
     uint8_t serializedOscore[35];
     uint8_t const expectedOscore[35] = {
@@ -875,12 +869,6 @@ static void test_oscore_message_test_vector4_request_client() {
     CU_ASSERT_EQUAL(oscore_message_setup(&ctx, &sender, &oscore_msg), 0);
 
     CU_ASSERT_EQUAL(coap_serialize_message(&coap_msg, serializedOscore), 35);
-
-    for(size_t i = 0; i < 35; i++) {
-        if(serializedOscore[i] != expectedOscore[i]) {
-            printf("test");
-        }
-    }
 
     CU_ASSERT_ARRAY_EQUAL(serializedOscore, expectedOscore, 35);
 
