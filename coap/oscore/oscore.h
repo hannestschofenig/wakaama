@@ -9,6 +9,7 @@
 #define OSCORE_FREE(ptr) lwm2m_free(ptr)
 
 #define OSCORE_PARTIALIV_MAXLEN 5
+#define OSCORE_SENDERSEQUENCENUMBER_MAX (uint64_t)((uint64_t)(1) << 40)
 #define OSCORE_OPTION_VALUE_MAXLEN 255
 
 #define COAP_SERIALIZE_OSCORE_OPTION(number, text)      \
@@ -17,9 +18,9 @@
       uint8_t hdr = (coap_pkt->oscore_partialIVLen & 0x07); \
       uint8_t len = hdr + 1; \
       if(coap_pkt->oscore_kidContextLen > 0) { hdr |= 0x10; len+= 1 + coap_pkt->oscore_kidContextLen;}\
-      hdr |= 0x08; \
-      len+=coap_pkt->oscore_kidLen;\
-      if(hdr == 0x08 && len == 1){ option += coap_set_option_header(number - current_number, 0, option);} \
+      if(coap_pkt->oscore_kid != NULL) hdr |= 0x08; \
+      len+=coap_pkt->oscore_kidLen; \
+      if(hdr == 0x00){ option += coap_set_option_header(number - current_number, 0, option);} \
       else { \
           option += coap_set_option_header(number - current_number, len, option); \
           *option = hdr; \
@@ -154,8 +155,16 @@ typedef struct oscore_sender_context {
 
 typedef struct oscore_message {
     void * packet; // coap packet
+
+    // populate with request id if response
+    uint8_t const * id;
+    uint16_t idLen;
+
+    // prepopulate partialIV with request partial IV if response
     uint8_t partialIV[8];
     size_t partialIVLen;
+
+    bool generatePartialIV;
 } oscore_message_t;
 
 // Message
