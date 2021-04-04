@@ -5,6 +5,8 @@
 #define OSCORE_MAXKEYLEN 16
 // maximum length of a nonce
 #define OSCORE_MAXNONCELEN 13
+// maximum Id length as specified in RFC8613 3.3
+#define OSCORE_MAX_ID_LEN (OSCORE_MAXNONCELEN - 6)
 // maximum length of HKDF
 #define OSCORE_HKDF_MAXLEN 32
 

@@ -104,12 +104,15 @@ static void test_oscore_serialize_option_partialIV_correctly() {
     uint8_t message[11];
     uint8_t const expectedmessage[] =  {0x40, COAP_GET, 0x12, 0x34,
                                         0x96,
-                                        0x05, 0x01, 0x02, 0x03,
+                                        0x0D, 0x01, 0x02, 0x03,
                                         0x04, 0x05};
 
     CU_ASSERT_EQUAL(coap_serialize_message(&packet, message), 11);
 
     for(unsigned int i = 0; i < sizeof(message); i++) {
+        if(message[i] != expectedmessage[i]) {
+            printf("test");
+        }
         CU_ASSERT_EQUAL(message[i], expectedmessage[i]);
     }
 }
@@ -123,7 +126,7 @@ static void test_oscore_serialize_option_kidContext_correctly() {
     uint8_t message[12];
     uint8_t const expectedmessage[] =  {0x40, COAP_GET, 0x12, 0x34,
                                         0x97,
-                                        0x08, 0x05, 0x01, 0x02,
+                                        0x18, 0x05, 0x01, 0x02,
                                         0x03, 0x04, 0x05};
 
     CU_ASSERT_EQUAL(coap_serialize_message(&packet, message), 12);
@@ -142,7 +145,7 @@ static void test_oscore_serialize_option_kid_correctly() {
     uint8_t message[11];
     uint8_t const expectedmessage[] =  {0x40, COAP_GET, 0x12, 0x34,
                                         0x96,
-                                        0x10, 0x01, 0x02, 0x03,
+                                        0x08, 0x01, 0x02, 0x03,
                                         0x04, 0x05};
 
     CU_ASSERT_EQUAL(coap_serialize_message(&packet, message), 11);
@@ -199,7 +202,7 @@ static void test_oscore_parse_option_with_s0_works() {
 }
 
 static void test_oscore_parse_option_with_invalid_encoding_returns_error() {
-    uint8_t const oscoreOption[] = {0x08, 0x05, 0x01, 0x02, 0x03, 0x04};
+    uint8_t const oscoreOption[] = {0x10, 0x05, 0x01, 0x02, 0x03, 0x04};
 
     coap_packet_t packet;
     CU_ASSERT_EQUAL(coap_parse_oscore_option(&packet, oscoreOption, sizeof(oscoreOption)), BAD_OPTION_4_02);
@@ -226,7 +229,7 @@ static void test_oscore_can_parse_option_with_partialIV() {
 static void test_oscore_can_parse_option_with_kidContext() {
     uint8_t message[] =  {0x40, COAP_GET, 0x12, 0x34,
                                 0x97,
-                                0x08, 0x05, 0x01, 0x02,
+                                0x10, 0x05, 0x01, 0x02,
                                 0x03, 0x04, 0x05};
     coap_packet_t packet;
     CU_ASSERT_EQUAL(coap_parse_message(&packet,message,sizeof(message)), 0);
@@ -244,7 +247,7 @@ static void test_oscore_can_parse_option_with_kidContext() {
 static void test_oscore_can_parse_option_with_kid() {
     uint8_t message[] =  {0x40, COAP_GET, 0x12, 0x34,
                                 0x96,
-                                0x10, 0x01, 0x02, 0x03,
+                                0x08, 0x01, 0x02, 0x03,
                                 0x04, 0x05};
 
     coap_packet_t packet;
@@ -362,11 +365,6 @@ static void test_oscore_derive_context_test_vector1_client() {
     uint8_t const masterSalt[] = {
         0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40
     };
-
-    uint8_t * senderId = NULL;
-    uint8_t const recipientId[] = {
-        0x01
-    };
     
     oscore_context_t ctx;
     oscore_init(&ctx);
@@ -382,10 +380,9 @@ static void test_oscore_derive_context_test_vector1_client() {
     commonCtx.masterSecretLen = sizeof(masterSecret);
     commonCtx.masterSalt = masterSalt;
     commonCtx.masterSaltLen = sizeof(masterSalt);
-    commonCtx.senderId = senderId;
     commonCtx.senderIdLen = 0;
-    commonCtx.recipientId = recipientId;
-    commonCtx.recipientIdLen = sizeof(recipientId);
+    commonCtx.recipientId[0] = 0x01;
+    commonCtx.recipientIdLen = 1;
 
     uint8_t const expectedSenderKey[16] = {
         0xf0, 0x91, 0x0e, 0xd7, 0x29, 0x5e, 0x6a, 0xd4,
@@ -400,6 +397,19 @@ static void test_oscore_derive_context_test_vector1_client() {
         0xee, 0xfb, 0x54, 0x98, 0x7c
     };
 
+    uint8_t const expectedSenderNonce[13] = {
+        0x46, 0x22, 0xd4, 0xdd, 0x6d, 0x94, 0x41, 0x68,
+        0xee, 0xfb, 0x54, 0x98, 0x7c
+    };
+
+    uint8_t const expectedRecipientNonce[13] = {
+        0x47, 0x22, 0xd4, 0xdd, 0x6d, 0x94, 0x41, 0x69,
+        0xee, 0xfb, 0x54, 0x98, 0x7c
+    };
+
+    uint8_t senderNonce[13];
+    uint8_t recipientNonce[13];
+
     oscore_derived_context_t derivedCtx;
     memset(&derivedCtx, 0, sizeof(oscore_derived_context_t));
 
@@ -411,6 +421,12 @@ static void test_oscore_derive_context_test_vector1_client() {
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.senderKey, expectedSenderKey, 16);
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.recipientKey, expectedRecipientKey, 16);
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.commonIV, expectedCommonIV, 13);
+
+    CU_ASSERT_EQUAL(oscore_derive_nonce(commonCtx.senderId, commonCtx.senderIdLen, derivedCtx.commonIV, derivedCtx.nonceLen, NULL, 0, senderNonce), 0);
+    CU_ASSERT_EQUAL(oscore_derive_nonce(commonCtx.recipientId, commonCtx.recipientIdLen, derivedCtx.commonIV, derivedCtx.nonceLen, NULL, 0, recipientNonce), 0);
+
+    CU_ASSERT_ARRAY_EQUAL(expectedSenderNonce, senderNonce, 13);
+    CU_ASSERT_ARRAY_EQUAL(expectedRecipientNonce, recipientNonce, 13);
 
     oscore_free(&ctx);
 }
@@ -423,11 +439,6 @@ static void test_oscore_derive_context_test_vector1_server() {
     uint8_t const masterSalt[] = {
         0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40
     };
-
-    uint8_t * recipientId = NULL;
-    uint8_t const senderId[] = {
-        0x01
-    };
     
     oscore_context_t ctx;
     oscore_init(&ctx);
@@ -443,10 +454,9 @@ static void test_oscore_derive_context_test_vector1_server() {
     commonCtx.masterSecretLen = sizeof(masterSecret);
     commonCtx.masterSalt = masterSalt;
     commonCtx.masterSaltLen = sizeof(masterSalt);
-    commonCtx.senderId = senderId;
-    commonCtx.senderIdLen = sizeof(senderId);
-    commonCtx.recipientId = recipientId;
     commonCtx.recipientIdLen = 0;
+    commonCtx.senderId[0] = 0x01;
+    commonCtx.senderIdLen = 1;
     
     uint8_t const expectedRecipientKey[16] = {
         0xf0, 0x91, 0x0e, 0xd7, 0x29, 0x5e, 0x6a, 0xd4,
@@ -460,6 +470,19 @@ static void test_oscore_derive_context_test_vector1_server() {
         0x46, 0x22, 0xd4, 0xdd, 0x6d, 0x94, 0x41, 0x68,
         0xee, 0xfb, 0x54, 0x98, 0x7c
     };
+    
+    uint8_t const expectedRecipientNonce[13] = {
+        0x46, 0x22, 0xd4, 0xdd, 0x6d, 0x94, 0x41, 0x68,
+        0xee, 0xfb, 0x54, 0x98, 0x7c
+    };
+
+    uint8_t const expectedSenderNonce[13] = {
+        0x47, 0x22, 0xd4, 0xdd, 0x6d, 0x94, 0x41, 0x69,
+        0xee, 0xfb, 0x54, 0x98, 0x7c
+    };
+
+    uint8_t senderNonce[13];
+    uint8_t recipientNonce[13];
 
     oscore_derived_context_t derivedCtx;
     memset(&derivedCtx, 0, sizeof(oscore_derived_context_t));
@@ -472,6 +495,12 @@ static void test_oscore_derive_context_test_vector1_server() {
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.senderKey, expectedSenderKey, 16);
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.recipientKey, expectedRecipientKey, 16);
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.commonIV, expectedCommonIV, 13);
+
+    CU_ASSERT_EQUAL(oscore_derive_nonce(commonCtx.senderId, commonCtx.senderIdLen, derivedCtx.commonIV, derivedCtx.nonceLen, NULL, 0, senderNonce), 0);
+    CU_ASSERT_EQUAL(oscore_derive_nonce(commonCtx.recipientId, commonCtx.recipientIdLen, derivedCtx.commonIV, derivedCtx.nonceLen, NULL, 0, recipientNonce), 0);
+
+    CU_ASSERT_ARRAY_EQUAL(expectedSenderNonce, senderNonce, 13);
+    CU_ASSERT_ARRAY_EQUAL(expectedRecipientNonce, recipientNonce, 13);
 
     oscore_free(&ctx);
 }
@@ -482,13 +511,6 @@ static void test_oscore_derive_context_test_vector2_client() {
         0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
     };
     uint8_t* masterSalt = NULL;
-
-    uint8_t senderId[] = {
-        0x00
-    };
-    uint8_t const recipientId[] = {
-        0x01
-    };
     
     oscore_context_t ctx;
     oscore_init(&ctx);
@@ -504,10 +526,10 @@ static void test_oscore_derive_context_test_vector2_client() {
     commonCtx.masterSecretLen = sizeof(masterSecret);
     commonCtx.masterSalt = masterSalt;
     commonCtx.masterSaltLen = 0;
-    commonCtx.senderId = senderId;
-    commonCtx.senderIdLen = sizeof(senderId);
-    commonCtx.recipientId = recipientId;
-    commonCtx.recipientIdLen = sizeof(recipientId);
+    commonCtx.senderId[0] = 0x00;
+    commonCtx.senderIdLen = 1;
+    commonCtx.recipientId[0] = 0x01;
+    commonCtx.recipientIdLen = 1;
 
     uint8_t const expectedSenderKey[16] = {
         0x32, 0x1b, 0x26, 0x94, 0x32, 0x53, 0xc7, 0xff,
@@ -522,6 +544,19 @@ static void test_oscore_derive_context_test_vector2_client() {
         0x10, 0xc5, 0x2e, 0x99, 0xf9
     };
 
+    uint8_t const expectedRecipientNonce[13] = {
+        0xbf, 0x35, 0xae, 0x29, 0x7d, 0x2d, 0xac, 0xe8,
+        0x10, 0xc5, 0x2e, 0x99, 0xf9
+    };
+
+    uint8_t const expectedSenderNonce[13] = {
+        0xbf, 0x35, 0xae, 0x29, 0x7d, 0x2d, 0xac, 0xe9,
+        0x10, 0xc5, 0x2e, 0x99, 0xf9
+    };
+
+    uint8_t senderNonce[13];
+    uint8_t recipientNonce[13];
+
     oscore_derived_context_t derivedCtx;
     memset(&derivedCtx, 0, sizeof(oscore_derived_context_t));
 
@@ -533,6 +568,12 @@ static void test_oscore_derive_context_test_vector2_client() {
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.senderKey, expectedSenderKey, 16);
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.recipientKey, expectedRecipientKey, 16);
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.commonIV, expectedCommonIV, 13);
+
+    CU_ASSERT_EQUAL(oscore_derive_nonce(commonCtx.senderId, commonCtx.senderIdLen, derivedCtx.commonIV, derivedCtx.nonceLen, NULL, 0, senderNonce), 0);
+    CU_ASSERT_EQUAL(oscore_derive_nonce(commonCtx.recipientId, commonCtx.recipientIdLen, derivedCtx.commonIV, derivedCtx.nonceLen, NULL, 0, recipientNonce), 0);
+
+    CU_ASSERT_ARRAY_EQUAL(expectedSenderNonce, senderNonce, 13);
+    CU_ASSERT_ARRAY_EQUAL(expectedRecipientNonce, recipientNonce, 13);
 
     oscore_free(&ctx);
 }
@@ -543,13 +584,6 @@ static void test_oscore_derive_context_test_vector2_server() {
         0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
     };
     uint8_t* masterSalt = NULL;
-
-    uint8_t senderId[] = {
-        0x01
-    };
-    uint8_t const recipientId[] = {
-        0x00
-    };
     
     oscore_context_t ctx;
     oscore_init(&ctx);
@@ -565,10 +599,10 @@ static void test_oscore_derive_context_test_vector2_server() {
     commonCtx.masterSecretLen = sizeof(masterSecret);
     commonCtx.masterSalt = masterSalt;
     commonCtx.masterSaltLen = 0;
-    commonCtx.senderId = senderId;
-    commonCtx.senderIdLen = sizeof(senderId);
-    commonCtx.recipientId = recipientId;
-    commonCtx.recipientIdLen = sizeof(recipientId);
+    commonCtx.senderId[0] = 0x01;
+    commonCtx.senderIdLen = 1;
+    commonCtx.recipientId[0] = 0x00;
+    commonCtx.recipientIdLen = 1;
 
     uint8_t const expectedRecipientKey[16] = {
         0x32, 0x1b, 0x26, 0x94, 0x32, 0x53, 0xc7, 0xff,
@@ -583,6 +617,19 @@ static void test_oscore_derive_context_test_vector2_server() {
         0x10, 0xc5, 0x2e, 0x99, 0xf9
     };
 
+    uint8_t const expectedSenderNonce[13] = {
+        0xbf, 0x35, 0xae, 0x29, 0x7d, 0x2d, 0xac, 0xe8,
+        0x10, 0xc5, 0x2e, 0x99, 0xf9
+    };
+    
+    uint8_t const expectedRecipientNonce[13] = {
+        0xbf, 0x35, 0xae, 0x29, 0x7d, 0x2d, 0xac, 0xe9,
+        0x10, 0xc5, 0x2e, 0x99, 0xf9
+    };
+
+    uint8_t senderNonce[13];
+    uint8_t recipientNonce[13];
+
     oscore_derived_context_t derivedCtx;
     memset(&derivedCtx, 0, sizeof(oscore_derived_context_t));
 
@@ -594,6 +641,12 @@ static void test_oscore_derive_context_test_vector2_server() {
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.senderKey, expectedSenderKey, 16);
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.recipientKey, expectedRecipientKey, 16);
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.commonIV, expectedCommonIV, 13);
+
+    CU_ASSERT_EQUAL(oscore_derive_nonce(commonCtx.senderId, commonCtx.senderIdLen, derivedCtx.commonIV, derivedCtx.nonceLen, NULL, 0, senderNonce), 0);
+    CU_ASSERT_EQUAL(oscore_derive_nonce(commonCtx.recipientId, commonCtx.recipientIdLen, derivedCtx.commonIV, derivedCtx.nonceLen, NULL, 0, recipientNonce), 0);
+
+    CU_ASSERT_ARRAY_EQUAL(expectedSenderNonce, senderNonce, 13);
+    CU_ASSERT_ARRAY_EQUAL(expectedRecipientNonce, recipientNonce, 13);
 
     oscore_free(&ctx);
 }
@@ -610,11 +663,6 @@ static void test_oscore_derive_context_test_vector3_client() {
     uint8_t const idContext[] = {
         0x37, 0xcb, 0xf3, 0x21, 0x00, 0x17, 0xa2, 0xd3
     };
-
-    uint8_t * senderId = NULL;
-    uint8_t const recipientId[] = {
-        0x01
-    };
     
     oscore_context_t ctx;
     oscore_init(&ctx);
@@ -632,10 +680,9 @@ static void test_oscore_derive_context_test_vector3_client() {
     commonCtx.masterSaltLen = sizeof(masterSalt);
     commonCtx.idContext = idContext;
     commonCtx.idContextLen = sizeof(idContext);
-    commonCtx.senderId = senderId;
     commonCtx.senderIdLen = 0;
-    commonCtx.recipientId = recipientId;
-    commonCtx.recipientIdLen = sizeof(recipientId);
+    commonCtx.recipientId[0] = 0x01;
+    commonCtx.recipientIdLen = 1;
 
     uint8_t const expectedSenderKey[16] = {
         0xaf, 0x2a, 0x13, 0x00, 0xa5, 0xe9, 0x57, 0x88,
@@ -650,6 +697,19 @@ static void test_oscore_derive_context_test_vector3_client() {
         0x0b, 0x71, 0x81, 0xb8, 0x5e
     };
 
+    uint8_t const expectedSenderNonce[13] = {
+        0x2c, 0xa5, 0x8f, 0xb8, 0x5f, 0xf1, 0xb8, 0x1c,
+        0x0b, 0x71, 0x81, 0xb8, 0x5e
+    };
+    
+    uint8_t const expectedRecipientNonce[13] = {
+        0x2d, 0xa5, 0x8f, 0xb8, 0x5f, 0xf1, 0xb8, 0x1d,
+        0x0b, 0x71, 0x81, 0xb8, 0x5e
+    };
+
+    uint8_t senderNonce[13];
+    uint8_t recipientNonce[13];
+
     oscore_derived_context_t derivedCtx;
     memset(&derivedCtx, 0, sizeof(oscore_derived_context_t));
 
@@ -661,6 +721,12 @@ static void test_oscore_derive_context_test_vector3_client() {
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.senderKey, expectedSenderKey, 16);
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.recipientKey, expectedRecipientKey, 16);
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.commonIV, expectedCommonIV, 13);
+
+    CU_ASSERT_EQUAL(oscore_derive_nonce(commonCtx.senderId, commonCtx.senderIdLen, derivedCtx.commonIV, derivedCtx.nonceLen, NULL, 0, senderNonce), 0);
+    CU_ASSERT_EQUAL(oscore_derive_nonce(commonCtx.recipientId, commonCtx.recipientIdLen, derivedCtx.commonIV, derivedCtx.nonceLen, NULL, 0, recipientNonce), 0);
+
+    CU_ASSERT_ARRAY_EQUAL(expectedSenderNonce, senderNonce, 13);
+    CU_ASSERT_ARRAY_EQUAL(expectedRecipientNonce, recipientNonce, 13);
 
     oscore_free(&ctx);
 }
@@ -677,11 +743,6 @@ static void test_oscore_derive_context_test_vector3_server() {
     uint8_t const idContext[] = {
         0x37, 0xcb, 0xf3, 0x21, 0x00, 0x17, 0xa2, 0xd3
     };
-
-    uint8_t * recipientId = NULL;
-    uint8_t const senderId[] = {
-        0x01
-    };
     
     oscore_context_t ctx;
     oscore_init(&ctx);
@@ -699,9 +760,8 @@ static void test_oscore_derive_context_test_vector3_server() {
     commonCtx.masterSaltLen = sizeof(masterSalt);
     commonCtx.idContext = idContext;
     commonCtx.idContextLen = sizeof(idContext);
-    commonCtx.senderId = senderId;
-    commonCtx.senderIdLen = sizeof(senderId);
-    commonCtx.recipientId = recipientId;
+    commonCtx.senderId[0] = 0x01;
+    commonCtx.senderIdLen = 1;
     commonCtx.recipientIdLen = 0;
 
     uint8_t const expectedRecipientKey[16] = {
@@ -716,6 +776,19 @@ static void test_oscore_derive_context_test_vector3_server() {
         0x2c, 0xa5, 0x8f, 0xb8, 0x5f, 0xf1, 0xb8, 0x1c,
         0x0b, 0x71, 0x81, 0xb8, 0x5e
     };
+    
+    uint8_t const expectedRecipientNonce[13] = {
+        0x2c, 0xa5, 0x8f, 0xb8, 0x5f, 0xf1, 0xb8, 0x1c,
+        0x0b, 0x71, 0x81, 0xb8, 0x5e
+    };
+    
+    uint8_t const expectedSenderNonce[13] = {
+        0x2d, 0xa5, 0x8f, 0xb8, 0x5f, 0xf1, 0xb8, 0x1d,
+        0x0b, 0x71, 0x81, 0xb8, 0x5e
+    };
+
+    uint8_t senderNonce[13];
+    uint8_t recipientNonce[13];
 
     oscore_derived_context_t derivedCtx;
     memset(&derivedCtx, 0, sizeof(oscore_derived_context_t));
@@ -728,6 +801,88 @@ static void test_oscore_derive_context_test_vector3_server() {
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.senderKey, expectedSenderKey, 16);
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.recipientKey, expectedRecipientKey, 16);
     CU_ASSERT_ARRAY_EQUAL(derivedCtx.commonIV, expectedCommonIV, 13);
+
+    CU_ASSERT_EQUAL(oscore_derive_nonce(commonCtx.senderId, commonCtx.senderIdLen, derivedCtx.commonIV, derivedCtx.nonceLen, NULL, 0, senderNonce), 0);
+    CU_ASSERT_EQUAL(oscore_derive_nonce(commonCtx.recipientId, commonCtx.recipientIdLen, derivedCtx.commonIV, derivedCtx.nonceLen, NULL, 0, recipientNonce), 0);
+
+    CU_ASSERT_ARRAY_EQUAL(expectedSenderNonce, senderNonce, 13);
+    CU_ASSERT_ARRAY_EQUAL(expectedRecipientNonce, recipientNonce, 13);
+
+    oscore_free(&ctx);
+}
+
+static void test_oscore_message_test_vector4_request_client() {
+    uint8_t serializedCoAP[] = {
+        0x44, 0x01, 0x5d, 0x1f, 0x00, 0x00, 0x39, 0x74,
+        0x39, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x68, 0x6f,
+        0x73, 0x74, 0x83, 0x74, 0x76, 0x31
+    };
+
+    uint8_t const senderKey[16] = {
+        0xf0, 0x91, 0x0e, 0xd7, 0x29, 0x5e, 0x6a, 0xd4,
+        0xb5, 0x4f, 0xc7, 0x93, 0x15, 0x43, 0x02, 0xff
+    };
+
+    uint8_t const commonIV[13] = {
+        0x46, 0x22, 0xd4, 0xdd, 0x6d, 0x94, 0x41, 0x68,
+        0xee, 0xfb, 0x54, 0x98, 0x7c
+    };
+
+    uint8_t const partialIV[1] = {
+        0x14
+    };
+
+    cn_cbor aeadAlg;
+    memset(&aeadAlg, 0, sizeof(cn_cbor));
+    aeadAlg.type = CN_CBOR_UINT;
+    aeadAlg.v.uint = COSE_ALGO_AES_CCM_16_64_128;
+
+    size_t const senderSequenceNumber = 20;
+
+    oscore_context_t ctx;
+    oscore_init(&ctx);
+
+    oscore_sender_context_t sender;
+    memset(&sender, 0, sizeof(oscore_sender_context_t));
+    sender.senderIdLen = 0;
+    sender.senderKey = senderKey;
+    sender.senderKeyLen = sizeof(senderKey);
+    sender.aeadAlgId = &aeadAlg;
+    sender.commonIV = commonIV;
+    sender.nonceLen = sizeof(commonIV);
+    sender.senderSequenceNumber = senderSequenceNumber;
+    
+
+    coap_packet_t coap_msg;
+    memset(&coap_msg, 0, sizeof(coap_packet_t));
+
+    coap_parse_message(&coap_msg, serializedCoAP, sizeof(serializedCoAP));
+
+    oscore_message_t oscore_msg;
+    memset(&oscore_msg, 0, sizeof(oscore_message_t));
+    oscore_msg.packet = &coap_msg;
+    oscore_msg.partialIV = partialIV;
+    oscore_msg.partialIVLen = sizeof(partialIV);
+
+    uint8_t serializedOscore[35];
+    uint8_t const expectedOscore[35] = {
+        0x44, 0x02, 0x5d, 0x1f, 0x00, 0x00, 0x39, 0x74, 0x39,
+        0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x68, 0x6f, 0x73, 0x74,
+        0x62, 0x09, 0x14, 0xff, 0x61, 0x2f, 0x10, 0x92, 0xf1,
+        0x77, 0x6f, 0x1c, 0x16, 0x68, 0xb3, 0x82, 0x5e
+    };
+
+    CU_ASSERT_EQUAL(oscore_message_setup(&ctx, &sender, &oscore_msg), 0);
+
+    CU_ASSERT_EQUAL(coap_serialize_message(&coap_msg, serializedOscore), 35);
+
+    for(size_t i = 0; i < 35; i++) {
+        if(serializedOscore[i] != expectedOscore[i]) {
+            printf("test");
+        }
+    }
+
+    CU_ASSERT_ARRAY_EQUAL(serializedOscore, expectedOscore, 35);
 
     oscore_free(&ctx);
 }
@@ -767,6 +922,9 @@ static struct TestTable table[] = {
         { "[dCTX] test vector 2 server", test_oscore_derive_context_test_vector2_server },
         { "[dCTX] test vector 3 client", test_oscore_derive_context_test_vector3_client},
         { "[dCTX] test vector 3 server", test_oscore_derive_context_test_vector3_server },
+
+        // Messages
+        { "[MSG] test vector 4 OSCORE Request, Client", test_oscore_message_test_vector4_request_client },
         { NULL, NULL },
 };
 

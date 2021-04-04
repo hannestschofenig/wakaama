@@ -5,9 +5,6 @@
 #include <string.h>
 #include <assert.h>
 
-#define OSCORE_MALLOC(size) lwm2m_malloc(size)
-#define OSCORE_FREE(ptr) lwm2m_free(ptr)
-
 static void ntworder(uint8_t * buffer, void * insert, size_t const size) {
 #ifdef LWM2M_BIG_ENDIAN
     mempcy(buffer, insert, size);
@@ -73,14 +70,17 @@ int coap_parse_oscore_option(void * packet, uint8_t const * value, uint32_t cons
         return BAD_OPTION_4_02;
     }
     coap_pkt->oscore_partialIVLen = (value[0] & 0x7);
+    if(optionLength < coap_pkt->oscore_partialIVLen + 1) {
+        return BAD_OPTION_4_02;
+    }
     kidLen -= coap_pkt->oscore_partialIVLen;
     maxLength += coap_pkt->oscore_partialIVLen;
-    if((value[0] & 0x08)) { // kid context available
+    if((value[0] & 0x10)) { // kid context available
         coap_pkt->oscore_kidContextLen = value[1+coap_pkt->oscore_partialIVLen];
         kidLen -= (coap_pkt->oscore_kidContextLen + 1);
         maxLength += (coap_pkt->oscore_kidContextLen + 1);
     }
-    if((value[0] & 0x10)) { // kid available
+    if((value[0] & 0x08)) { // kid available
         if(kidLen < 0) {
             return BAD_OPTION_4_02;
         }
@@ -101,7 +101,7 @@ int coap_parse_oscore_option(void * packet, uint8_t const * value, uint32_t cons
         coap_pkt->oscore_kidContext = value + idx + 1;
         idx += coap_pkt->oscore_kidContextLen;
     }
-    if((value[0] & 0x08)) { // s could be 0
+    if((value[0] & 0x10)) { // s could be 0
         idx++;
     }
     if(coap_pkt->oscore_kidLen > 0) {
@@ -315,6 +315,10 @@ int oscore_derive_context(oscore_context_t * ctx, oscore_common_context_t const 
     uint8_t prk[OSCORE_HKDF_MAXLEN];
     char const typeKey[] = "Key";
     char const typeIV[] = "IV";
+    if(commonCtx->senderIdLen > OSCORE_MAX_ID_LEN || commonCtx->recipientIdLen > OSCORE_MAX_ID_LEN) {
+        LOG("Sender or recipient Id out of range");
+        return -1;
+    }
 
     oscore_hkdf_alg_t * hkdf = oscore_hkdf_algorithm_find(ctx, &commonCtx->hkdfAlgId);
     cose_aead_alg_t * aead = cose_aead_algorithm_find(&ctx->cose, &commonCtx->aeadAlgId);
@@ -373,12 +377,8 @@ int oscore_derive_context(oscore_context_t * ctx, oscore_common_context_t const 
     cn_cbor_array_append(&info, &L, NULL);
 
     
-    if(commonCtx->senderIdLen > commonCtx->recipientIdLen){
-        maxInfoLength += 3 + commonCtx->senderIdLen; // cbor bytestring + 2 bytes for length
-    }
-    else {
-        maxInfoLength += 3 + commonCtx->recipientIdLen;
-    }
+
+    maxInfoLength += 3 + OSCORE_MAX_ID_LEN;
     maxInfoLength += 9; // cbor encoded aead alg (currently no string algorithms are defined, int value algorithms should be less than 2^32)
     maxInfoLength += 4; // cbor encoded type
     maxInfoLength += 2; // cbor encoded L (all known keylength or noncelength are less than 255 until now)
@@ -442,6 +442,185 @@ int oscore_derive_context(oscore_context_t * ctx, oscore_common_context_t const 
         return -1;
     }
     OSCORE_FREE(serializedInfo);
+
+    return 0;
+}
+
+
+int oscore_derive_nonce(uint8_t const * id, size_t idLen, uint8_t const * commonIV, size_t commonIVLen, uint8_t const * partialIV, size_t partialIVLen, uint8_t * nonce) {
+    if(commonIV == NULL || nonce == NULL){
+        return -1;
+    }
+    uint8_t buf1[OSCORE_MAXNONCELEN];
+    memset(buf1, 0, OSCORE_MAXNONCELEN);
+    buf1[0] = idLen;
+    if(idLen > OSCORE_MAX_ID_LEN) {
+        LOG("Id is out of range");
+        return -1;
+    }
+    if(commonIVLen > OSCORE_MAXNONCELEN) {
+        LOG("CommonIV is out of range");
+        return -1;
+    }
+    if(partialIVLen > OSCORE_PARTIALIV_MAXLEN){
+        LOG("PartialIV is out of range");
+        return -1;
+    }
+    if(id != NULL) {
+        memcpy(buf1+1+OSCORE_MAX_ID_LEN-idLen, id, idLen);
+    }
+    
+    if(partialIV != NULL){
+        memcpy(buf1 + commonIVLen - partialIVLen, partialIV, partialIVLen);
+    }
+    for(size_t i = 0; i < commonIVLen; i++) {
+        nonce[i] = buf1[i] ^ commonIV[i];
+    }
+    return 0;
+}
+
+
+static coap_option_t const OSCORE_E_OPTIONS[] = {
+    COAP_OPTION_IF_MATCH,
+    COAP_OPTION_ETAG,
+    COAP_OPTION_IF_NONE_MATCH,
+    COAP_OPTION_OBSERVE,
+    COAP_OPTION_LOCATION_PATH,
+    COAP_OPTION_URI_PATH,
+    COAP_OPTION_CONTENT_TYPE,
+    COAP_OPTION_MAX_AGE,
+    COAP_OPTION_URI_QUERY,
+    COAP_OPTION_ACCEPT,
+    COAP_OPTION_LOCATION_QUERY,
+    COAP_OPTION_BLOCK2,
+    COAP_OPTION_BLOCK1,
+};
+
+#define REMOVE_OPTION(packet, opt) (packet)->options[opt / OPTION_MAP_SIZE] &= ((0xFF) ^ (1 << (opt % OPTION_MAP_SIZE)))
+
+static coap_option_t oscore_internal_get_next_EOption(coap_packet_t * packet) {
+    for(size_t i = 0; i < sizeof(OSCORE_E_OPTIONS); i++) {
+        if(IS_OPTION(packet, OSCORE_E_OPTIONS[i])) {
+            return OSCORE_E_OPTIONS[i];
+        }
+    }
+    return OPTION_MAX_VALUE;
+}
+
+static int oscore_move_EOptions(coap_packet_t * unprotected, coap_packet_t * protectedMsg) {
+    coap_option_t option;
+    while((option = oscore_internal_get_next_EOption(unprotected)) != OPTION_MAX_VALUE) {
+        REMOVE_OPTION(unprotected, option);
+        switch(option) {
+            case COAP_OPTION_URI_PATH:
+                protectedMsg->uri_path = unprotected->uri_path;
+                unprotected->uri_path = NULL;
+                SET_OPTION(protectedMsg, option);
+            break;
+
+            default:
+
+            LOG("Unsupported option");
+        }
+    }   
+
+    return 0;
+}
+
+int oscore_message_setup(oscore_context_t * ctx, oscore_sender_context_t * sender, oscore_message_t * msg) {
+    if(ctx == NULL || sender == NULL || msg == NULL) {
+        return -1;
+    }
+    uint8_t nonce[OSCORE_MAXNONCELEN];
+    int ret = oscore_derive_nonce(sender->senderId, sender->senderIdLen, sender->commonIV, sender->nonceLen, msg->partialIV, msg->partialIVLen, nonce);
+    if(ret < 0) {
+        return -1;
+    }
+
+    cose_aead_alg_t * aead = cose_aead_algorithm_find(&ctx->cose, sender->aeadAlgId);
+    if(aead == NULL){
+        LOG("aead algorithm not defined");
+        return -1;
+    }
+    coap_packet_t * oscore = (coap_packet_t *)msg->packet;
+    coap_packet_t coap_pkt;
+    uint8_t code = COAP_POST; //TODO distinguish between Requests and Responses (COAP_204_CHANGED) and notifications
+    coap_init_message(&coap_pkt, oscore->type, oscore->code, oscore->mid);
+    coap_set_payload(&coap_pkt, oscore->payload, oscore->payload_len);
+
+    coap_set_status_code(oscore, code);
+
+    if(oscore_move_EOptions(oscore, &coap_pkt) != 0) {
+        LOG("Could not move options");
+        return -1;
+    }
+
+    ret = coap_serialize_get_size(&coap_pkt);
+    if(ret <= 0){
+        LOG("Could not calculate size of coap message");
+        return -1;
+    }
+    int sizeCoap = ret;
+
+    ret = oscore_additional_authenticated_data_serialize(NULL, 0, sender->aeadAlgId, sender->senderId, sender->senderIdLen, msg->partialIV, msg->partialIVLen);
+    if(ret <= 0) {
+        LOG("Could not serialize AAD");
+        return -1;
+    }
+    int aadLen = ret;
+    uint8_t * aad = OSCORE_MALLOC(aadLen);
+        
+    if(aad == NULL) {
+        LOG("Out of memory");
+        return -1;
+    }
+    uint8_t * serializedCoap = OSCORE_MALLOC(sizeCoap);
+    if(serializedCoap == NULL){
+        LOG("Out of memory");
+        OSCORE_FREE(aad);
+        return -1;
+    }
+    aadLen = oscore_additional_authenticated_data_serialize(aad, aadLen, sender->aeadAlgId, sender->senderId, sender->senderIdLen, msg->partialIV, msg->partialIVLen);
+    sizeCoap = coap_serialize_message(&coap_pkt, serializedCoap);
+    
+    memmove(serializedCoap, serializedCoap+1, 1); // move code
+    memmove(serializedCoap+1,serializedCoap+4,sizeCoap-4); // move options and payload
+    sizeCoap = sizeCoap - 3;
+
+    cose_aead_parameters_t parameters;
+    parameters.plaintext = serializedCoap;
+    parameters.plaintextLen = sizeCoap;
+    parameters.key.key = sender->senderKey;
+    parameters.key.keyLen = sender->senderKeyLen;
+    parameters.nonce = nonce;
+    parameters.nonceLen = sender->nonceLen;
+    parameters.aadEncoded = aad;
+    parameters.aadLen = aadLen;
+
+    uint8_t * out = OSCORE_MALLOC(parameters.plaintextLen + aead->relatingCipherTextLen);
+    if(out == NULL) {
+        OSCORE_FREE(aad);
+        OSCORE_FREE(serializedCoap);
+        LOG("Out of memory");
+        return -1;
+    }
+
+    if(aead->encrypt(&parameters, NULL, out) != COSE_OK){
+        OSCORE_FREE(aad);
+        OSCORE_FREE(serializedCoap);
+        LOG("Could not encrypt message");
+        return -1;
+    }
+    OSCORE_FREE(aad);
+    OSCORE_FREE(serializedCoap);
+    
+    coap_set_payload(oscore, out, parameters.plaintextLen + aead->relatingCipherTextLen);
+    coap_set_header_oscore(oscore, msg->partialIV, msg->partialIVLen, sender->idContext, sender->idContextLen, sender->senderId, sender->senderIdLen);
+    ret = coap_serialize_get_size(oscore);
+    if(ret < 0){
+        LOG("Could not get size of serialized coap package");
+        return -1;
+    }
 
     return 0;
 }
