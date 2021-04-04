@@ -1,6 +1,7 @@
 #include "tests.h"
 #include "CUnit/Basic.h"
 #include "er-coap-13/er-coap-13.h"
+#include "liblwm2m.h"
 
 
 #define CU_ASSERT_ARRAY_EQUAL(actual, expected, length) \
@@ -104,15 +105,12 @@ static void test_oscore_serialize_option_partialIV_correctly() {
     uint8_t message[11];
     uint8_t const expectedmessage[] =  {0x40, COAP_GET, 0x12, 0x34,
                                         0x96,
-                                        0x0D, 0x01, 0x02, 0x03,
+                                        0x05, 0x01, 0x02, 0x03,
                                         0x04, 0x05};
 
     CU_ASSERT_EQUAL(coap_serialize_message(&packet, message), 11);
 
     for(unsigned int i = 0; i < sizeof(message); i++) {
-        if(message[i] != expectedmessage[i]) {
-            printf("test");
-        }
         CU_ASSERT_EQUAL(message[i], expectedmessage[i]);
     }
 }
@@ -126,7 +124,7 @@ static void test_oscore_serialize_option_kidContext_correctly() {
     uint8_t message[12];
     uint8_t const expectedmessage[] =  {0x40, COAP_GET, 0x12, 0x34,
                                         0x97,
-                                        0x18, 0x05, 0x01, 0x02,
+                                        0x10, 0x05, 0x01, 0x02,
                                         0x03, 0x04, 0x05};
 
     CU_ASSERT_EQUAL(coap_serialize_message(&packet, message), 12);
@@ -840,6 +838,7 @@ static void test_oscore_message_test_vector4_request_client() {
 
     oscore_sender_context_t sender;
     memset(&sender, 0, sizeof(oscore_sender_context_t));
+    sender.senderId = (uint8_t*)0x01; // wont be dereferenced when senderIdLen = 0
     sender.senderIdLen = 0;
     sender.senderKey = senderKey;
     sender.senderKeyLen = sizeof(senderKey);
@@ -866,12 +865,312 @@ static void test_oscore_message_test_vector4_request_client() {
         0x77, 0x6f, 0x1c, 0x16, 0x68, 0xb3, 0x82, 0x5e
     };
 
-    CU_ASSERT_EQUAL(oscore_message_setup(&ctx, &sender, &oscore_msg), 0);
+    CU_ASSERT_EQUAL(oscore_message_transform(&ctx, &sender, &oscore_msg), 0);
 
     CU_ASSERT_EQUAL(coap_serialize_message(&coap_msg, serializedOscore), 35);
 
     CU_ASSERT_ARRAY_EQUAL(serializedOscore, expectedOscore, 35);
+    OSCORE_FREE(coap_msg.payload);
+    oscore_free(&ctx);
+}
 
+static void test_oscore_message_test_vector5_request_client() {
+    uint8_t serializedCoAP[] = {
+        0x44, 0x01, 0x71, 0xc3, 0x00, 0x00, 0xb9, 0x32,
+        0x39, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x68, 0x6f,
+        0x73, 0x74, 0x83, 0x74, 0x76, 0x31
+    };
+
+    uint8_t const senderKey[16] = {
+        0x32, 0x1b, 0x26, 0x94, 0x32, 0x53, 0xc7, 0xff,
+        0xb6, 0x00, 0x3b, 0x0b, 0x64, 0xd7, 0x40, 0x41
+    };
+
+    uint8_t const commonIV[13] = {
+        0xbe, 0x35, 0xae, 0x29, 0x7d, 0x2d, 0xac, 0xe9,
+        0x10, 0xc5, 0x2e, 0x99, 0xf9
+    };
+
+    uint8_t const senderId[1] = {
+        0x00
+    };
+
+    cn_cbor aeadAlg;
+    memset(&aeadAlg, 0, sizeof(cn_cbor));
+    aeadAlg.type = CN_CBOR_UINT;
+    aeadAlg.v.uint = COSE_ALGO_AES_CCM_16_64_128;
+
+    size_t const senderSequenceNumber = 20;
+
+    oscore_context_t ctx;
+    oscore_init(&ctx);
+
+    oscore_sender_context_t sender;
+    memset(&sender, 0, sizeof(oscore_sender_context_t));
+    sender.senderId = senderId;
+    sender.senderIdLen = sizeof(senderId);
+    sender.senderKey = senderKey;
+    sender.senderKeyLen = sizeof(senderKey);
+    sender.aeadAlgId = &aeadAlg;
+    sender.commonIV = commonIV;
+    sender.nonceLen = sizeof(commonIV);
+    sender.senderSequenceNumber = senderSequenceNumber;
+    
+
+    coap_packet_t coap_msg;
+    memset(&coap_msg, 0, sizeof(coap_packet_t));
+
+    coap_parse_message(&coap_msg, serializedCoAP, sizeof(serializedCoAP));
+
+    oscore_message_t oscore_msg;
+    memset(&oscore_msg, 0, sizeof(oscore_message_t));
+    oscore_msg.packet = &coap_msg;
+
+    uint8_t serializedOscore[36];
+    uint8_t const expectedOscore[36] = {
+        0x44, 0x02, 0x71, 0xc3, 0x00, 0x00, 0xb9, 0x32,
+        0x39, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x68, 0x6f,
+        0x73, 0x74, 0x63, 0x09, 0x14, 0x00, 0xff, 0x4e,
+        0xd3, 0x39, 0xa5, 0xa3, 0x79, 0xb0, 0xb8, 0xbc,
+        0x73, 0x1f, 0xff, 0xb0
+    };
+
+    CU_ASSERT_EQUAL(oscore_message_transform(&ctx, &sender, &oscore_msg), 0);
+
+    CU_ASSERT_EQUAL(coap_serialize_message(&coap_msg, serializedOscore), 36);
+
+    CU_ASSERT_ARRAY_EQUAL(serializedOscore, expectedOscore, 36);
+    OSCORE_FREE(coap_msg.payload);
+    oscore_free(&ctx);
+}
+
+static void test_oscore_message_test_vector6_request_client() {
+    uint8_t serializedCoAP[] = {
+         0x44, 0x01, 0x2f, 0x8e, 0xef, 0x9b, 0xbf, 0x7a,
+         0x39, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x68, 0x6f,
+         0x73, 0x74, 0x83, 0x74, 0x76, 0x31
+    };
+
+    uint8_t const senderKey[16] = {
+        0xaf, 0x2a, 0x13, 0x00, 0xa5, 0xe9, 0x57, 0x88,
+        0xb3, 0x56, 0x33, 0x6e, 0xee, 0xcd, 0x2b, 0x92
+    };
+
+    uint8_t const idContext[8] = {
+        0x37, 0xcb, 0xf3, 0x21, 0x00, 0x17, 0xa2, 0xd3
+    };
+
+    uint8_t const commonIV[13] = {
+        0x2c, 0xa5, 0x8f, 0xb8, 0x5f, 0xf1, 0xb8, 0x1c,
+        0x0b, 0x71, 0x81, 0xb8, 0x5e
+    };
+
+    cn_cbor aeadAlg;
+    memset(&aeadAlg, 0, sizeof(cn_cbor));
+    aeadAlg.type = CN_CBOR_UINT;
+    aeadAlg.v.uint = COSE_ALGO_AES_CCM_16_64_128;
+
+    size_t const senderSequenceNumber = 20;
+
+    oscore_context_t ctx;
+    oscore_init(&ctx);
+
+    oscore_sender_context_t sender;
+    memset(&sender, 0, sizeof(oscore_sender_context_t));
+    sender.senderId = (uint8_t*)0x01; // wont be dereferenced when senderIdLen = 0
+    sender.senderIdLen = 0;
+    sender.idContext = idContext;
+    sender.idContextLen = sizeof(idContext);
+    sender.senderKey = senderKey;
+    sender.senderKeyLen = sizeof(senderKey);
+    sender.aeadAlgId = &aeadAlg;
+    sender.commonIV = commonIV;
+    sender.nonceLen = sizeof(commonIV);
+    sender.senderSequenceNumber = senderSequenceNumber;
+    
+
+    coap_packet_t coap_msg;
+    memset(&coap_msg, 0, sizeof(coap_packet_t));
+
+    coap_parse_message(&coap_msg, serializedCoAP, sizeof(serializedCoAP));
+
+    oscore_message_t oscore_msg;
+    memset(&oscore_msg, 0, sizeof(oscore_message_t));
+    oscore_msg.packet = &coap_msg;
+
+    uint8_t serializedOscore[44];
+    uint8_t const expectedOscore[44] = {
+        0x44, 0x02, 0x2f, 0x8e, 0xef, 0x9b, 0xbf, 0x7a,
+        0x39, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x68, 0x6f,
+        0x73, 0x74, 0x6b, 0x19, 0x14, 0x08, 0x37, 0xcb,
+        0xf3, 0x21, 0x00, 0x17, 0xa2, 0xd3, 0xff, 0x72,
+        0xcd, 0x72, 0x73, 0xfd, 0x33, 0x1a, 0xc4, 0x5c,
+        0xff, 0xbe, 0x55, 0xc3
+    };
+
+    CU_ASSERT_EQUAL(oscore_message_transform(&ctx, &sender, &oscore_msg), 0);
+
+    CU_ASSERT_EQUAL(coap_serialize_message(&coap_msg, serializedOscore), 44);
+
+    CU_ASSERT_ARRAY_EQUAL(serializedOscore, expectedOscore, 44);
+    OSCORE_FREE(coap_msg.payload);
+    oscore_free(&ctx);
+}
+
+static void test_oscore_message_test_vector7_response_server() {
+    uint8_t serializedCoAP[] = {
+         0x64, 0x45, 0x5d, 0x1f, 0x00, 0x00, 0x39, 0x74,
+         0xff, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57,
+         0x6f, 0x72, 0x6c, 0x64, 0x21
+    };
+
+    uint8_t const senderKey[16] = {
+        0xff, 0xb1, 0x4e, 0x09, 0x3c, 0x94, 0xc9, 0xca,
+        0xc9, 0x47, 0x16, 0x48, 0xb4, 0xf9, 0x87, 0x10
+    };
+
+    uint8_t const commonIV[13] = {
+        0x46, 0x22, 0xd4, 0xdd, 0x6d, 0x94, 0x41, 0x68,
+        0xee, 0xfb, 0x54, 0x98, 0x7c
+    };
+
+    uint8_t const senderId[1] = {
+        0x01
+    };
+
+    cn_cbor aeadAlg;
+    memset(&aeadAlg, 0, sizeof(cn_cbor));
+    aeadAlg.type = CN_CBOR_UINT;
+    aeadAlg.v.uint = COSE_ALGO_AES_CCM_16_64_128;
+
+    size_t const senderSequenceNumber = 0;
+
+    oscore_context_t ctx;
+    oscore_init(&ctx);
+
+    oscore_sender_context_t sender;
+    memset(&sender, 0, sizeof(oscore_sender_context_t));
+    sender.senderId = senderId;
+    sender.senderIdLen = sizeof(senderId);
+    sender.senderKey = senderKey;
+    sender.senderKeyLen = sizeof(senderKey);
+    sender.aeadAlgId = &aeadAlg;
+    sender.commonIV = commonIV;
+    sender.nonceLen = sizeof(commonIV);
+    sender.senderSequenceNumber = senderSequenceNumber;
+    
+
+    coap_packet_t coap_msg;
+    memset(&coap_msg, 0, sizeof(coap_packet_t));
+    
+
+    coap_parse_message(&coap_msg, serializedCoAP, sizeof(serializedCoAP));
+
+    oscore_message_t oscore_msg;
+    memset(&oscore_msg, 0, sizeof(oscore_message_t));
+    oscore_msg.packet = &coap_msg;
+    // populated from request
+    oscore_msg.partialIV[0] = 0x14;
+    oscore_msg.partialIVLen = 1;
+    oscore_msg.id = NULL; // sender id was empty byte array
+    oscore_msg.idLen = 0;
+
+    uint8_t serializedOscore[32];
+    uint8_t const expectedOscore[32] = {
+        0x64, 0x44, 0x5d, 0x1f, 0x00, 0x00, 0x39, 0x74,
+        0x90, 0xff, 0xdb, 0xaa, 0xd1, 0xe9, 0xa7, 0xe7,
+        0xb2, 0xa8, 0x13, 0xd3, 0xc3, 0x15, 0x24, 0x37,
+        0x83, 0x03, 0xcd, 0xaf, 0xae, 0x11, 0x91, 0x06
+    };
+
+    CU_ASSERT_EQUAL(oscore_message_transform(&ctx, &sender, &oscore_msg), 0);
+
+    CU_ASSERT_EQUAL(coap_serialize_message(&coap_msg, serializedOscore), 32);
+
+
+    CU_ASSERT_ARRAY_EQUAL(serializedOscore, expectedOscore, 32);
+    OSCORE_FREE(coap_msg.payload);
+    oscore_free(&ctx);
+}
+
+static void test_oscore_message_test_vector8_response_server() {
+    uint8_t serializedCoAP[] = {
+         0x64, 0x45, 0x5d, 0x1f, 0x00, 0x00, 0x39, 0x74,
+         0xff, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57,
+         0x6f, 0x72, 0x6c, 0x64, 0x21
+    };
+
+    uint8_t const senderKey[16] = {
+        0xff, 0xb1, 0x4e, 0x09, 0x3c, 0x94, 0xc9, 0xca,
+        0xc9, 0x47, 0x16, 0x48, 0xb4, 0xf9, 0x87, 0x10
+    };
+
+    uint8_t const commonIV[13] = {
+        0x46, 0x22, 0xd4, 0xdd, 0x6d, 0x94, 0x41, 0x68,
+        0xee, 0xfb, 0x54, 0x98, 0x7c
+    };
+
+    uint8_t const senderId[1] = {
+        0x01
+    };
+
+    cn_cbor aeadAlg;
+    memset(&aeadAlg, 0, sizeof(cn_cbor));
+    aeadAlg.type = CN_CBOR_UINT;
+    aeadAlg.v.uint = COSE_ALGO_AES_CCM_16_64_128;
+
+    size_t const senderSequenceNumber = 0;
+
+    oscore_context_t ctx;
+    oscore_init(&ctx);
+
+    oscore_sender_context_t sender;
+    memset(&sender, 0, sizeof(oscore_sender_context_t));
+    sender.senderId = senderId;
+    sender.senderIdLen = sizeof(senderId);
+    sender.senderKey = senderKey;
+    sender.senderKeyLen = sizeof(senderKey);
+    sender.aeadAlgId = &aeadAlg;
+    sender.commonIV = commonIV;
+    sender.nonceLen = sizeof(commonIV);
+    sender.senderSequenceNumber = senderSequenceNumber;
+    
+
+    coap_packet_t coap_msg;
+    memset(&coap_msg, 0, sizeof(coap_packet_t));
+    
+
+    coap_parse_message(&coap_msg, serializedCoAP, sizeof(serializedCoAP));
+
+    oscore_message_t oscore_msg;
+    memset(&oscore_msg, 0, sizeof(oscore_message_t));
+    oscore_msg.packet = &coap_msg;
+    oscore_msg.partialIV[0] = 0x14;
+    oscore_msg.partialIVLen = 1;
+    // generate new partialIV
+    oscore_msg.generatePartialIV = true;
+
+    uint8_t serializedOscore[34];
+    uint8_t const expectedOscore[34] = {
+        0x64, 0x44, 0x5d, 0x1f, 0x00, 0x00, 0x39, 0x74,
+        0x92, 0x01, 0x00, 0xff, 0x4d, 0x4c, 0x13, 0x66,
+        0x93, 0x84, 0xb6, 0x73, 0x54, 0xb2, 0xb6, 0x17,
+        0x5f, 0xf4, 0xb8, 0x65, 0x8c, 0x66, 0x6a, 0x6c,
+        0xf8, 0x8e
+    };
+
+    CU_ASSERT_EQUAL(oscore_message_transform(&ctx, &sender, &oscore_msg), 0);
+    int ret = coap_serialize_message(&coap_msg, serializedOscore);
+    CU_ASSERT_EQUAL(coap_serialize_message(&coap_msg, serializedOscore), 34);
+
+    for(size_t i = 0; i < sizeof(expectedOscore); i++) {
+        if(serializedOscore[i]!=expectedOscore[i]) {
+            printf("test");
+        }
+    }
+
+    CU_ASSERT_ARRAY_EQUAL(serializedOscore, expectedOscore, 34);
+    OSCORE_FREE(coap_msg.payload);
     oscore_free(&ctx);
 }
 
@@ -913,6 +1212,10 @@ static struct TestTable table[] = {
 
         // Messages
         { "[MSG] test vector 4 OSCORE Request, Client", test_oscore_message_test_vector4_request_client },
+        { "[MSG] test vector 5 OSCORE Request, Client", test_oscore_message_test_vector5_request_client },
+        { "[MSG] test vector 6 OSCORE Request, Client", test_oscore_message_test_vector6_request_client },
+        { "[MSG] test vector 7 OSCORE Response, Server", test_oscore_message_test_vector7_response_server },
+        { "[MSG] test vector 8 OSCORE Response, Server", test_oscore_message_test_vector8_response_server },
         { NULL, NULL },
 };
 

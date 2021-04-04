@@ -532,7 +532,15 @@ int oscore_message_transform(oscore_context_t * ctx, oscore_sender_context_t * s
     if(ctx == NULL || sender == NULL || msg == NULL) {
         return -1;
     }
+    if(msg->partialIVLen > OSCORE_PARTIALIV_MAXLEN) {
+        return -1;
+    }
+    uint8_t requestPIV[OSCORE_PARTIALIV_MAXLEN];
+    size_t requestPIVLen = msg->partialIVLen;
+    memcpy(requestPIV, msg->partialIV, msg->partialIVLen);
 
+    uint8_t const * id;
+    size_t idLen = 0;
     coap_packet_t * oscore = (coap_packet_t *)msg->packet;
     coap_packet_t coap_pkt;
     bool isResponse = false;
@@ -543,7 +551,20 @@ int oscore_message_transform(oscore_context_t * ctx, oscore_sender_context_t * s
         isResponse = true;
     }
 
-    if(isResponse) { // partial IV must not be calculated
+    if(!isResponse || msg->generatePartialIV) {
+        id = sender->senderId;
+        idLen = sender->senderIdLen;
+    }
+    else {
+        id = msg->id;
+        idLen = msg->idLen;
+    }
+
+    if(!isResponse || msg->generatePartialIV) { // partial IV must not be calculated
+        if(sender->senderSequenceNumber > OSCORE_SENDERSEQUENCENUMBER_MAX) {
+            LOG("Sender sequence number out of range");
+            return -1;
+        }
         memset(msg->partialIV, 0, 8);
         ntworder(msg->partialIV, &sender->senderSequenceNumber, 8);
         for(int i = 7; i >= 0; i--) {
@@ -553,10 +574,14 @@ int oscore_message_transform(oscore_context_t * ctx, oscore_sender_context_t * s
             }
         }
         memmove(msg->partialIV, msg->partialIV+8-msg->partialIVLen, msg->partialIVLen);
+        if(sender->senderSequenceNumber == 0){
+            msg->partialIVLen = 1;
+        }
     }
     
     uint8_t nonce[OSCORE_MAXNONCELEN];
-    int ret = oscore_derive_nonce(sender->senderId, sender->senderIdLen, sender->commonIV, sender->nonceLen, msg->partialIV, msg->partialIVLen, nonce);
+    int ret = 0;
+    ret = oscore_derive_nonce(id, idLen, sender->commonIV, sender->nonceLen, msg->partialIV, msg->partialIVLen, nonce);
     if(ret < 0) {
         return -1;
     }
@@ -585,7 +610,14 @@ int oscore_message_transform(oscore_context_t * ctx, oscore_sender_context_t * s
     }
     int sizeCoap = ret;
 
-    ret = oscore_additional_authenticated_data_serialize(NULL, 0, sender->aeadAlgId, sender->senderId, sender->senderIdLen, msg->partialIV, msg->partialIVLen);
+    if(isResponse) {
+        ret = oscore_additional_authenticated_data_serialize(NULL, 0, sender->aeadAlgId, msg->id, msg->idLen, requestPIV, requestPIVLen);
+    }
+    else {
+        ret = oscore_additional_authenticated_data_serialize(NULL, 0, sender->aeadAlgId, sender->senderId, sender->senderIdLen, msg->partialIV, msg->partialIVLen);
+    }
+    
+    
     if(ret <= 0) {
         LOG("Could not serialize AAD");
         return -1;
@@ -603,11 +635,18 @@ int oscore_message_transform(oscore_context_t * ctx, oscore_sender_context_t * s
         OSCORE_FREE(aad);
         return -1;
     }
-    aadLen = oscore_additional_authenticated_data_serialize(aad, aadLen, sender->aeadAlgId, sender->senderId, sender->senderIdLen, msg->partialIV, msg->partialIVLen);
+
+    if(isResponse) {
+        aadLen = oscore_additional_authenticated_data_serialize(aad, aadLen, sender->aeadAlgId, msg->id, msg->idLen, requestPIV, requestPIVLen);
+    }
+    else {
+        aadLen = oscore_additional_authenticated_data_serialize(aad, aadLen, sender->aeadAlgId, sender->senderId, sender->senderIdLen, msg->partialIV, msg->partialIVLen);
+    }
+    
     sizeCoap = coap_serialize_message(&coap_pkt, serializedCoap);
     
     memmove(serializedCoap, serializedCoap+1, 1); // move code
-    memmove(serializedCoap+1,serializedCoap+4,sizeCoap-4); // move options and payload
+    memmove(serializedCoap+1,serializedCoap+4, sizeCoap-4); // move options and payload
     sizeCoap = sizeCoap - 3;
 
     cose_aead_parameters_t parameters;
@@ -640,7 +679,14 @@ int oscore_message_transform(oscore_context_t * ctx, oscore_sender_context_t * s
     coap_set_payload(oscore, out, parameters.plaintextLen + aead->relatingCipherTextLen);
 
     if(isResponse) {
-        coap_set_header_oscore(oscore, NULL, 0, sender->idContext, sender->idContextLen, NULL, 0);
+        if(msg->generatePartialIV) {
+            coap_set_header_oscore(oscore, msg->partialIV, msg->partialIVLen, sender->idContext, sender->idContextLen, NULL, 0);
+            sender->senderSequenceNumber++;
+        }
+        else{
+            coap_set_header_oscore(oscore, NULL, 0, sender->idContext, sender->idContextLen, NULL, 0);
+        }
+        
     }
     else {
         coap_set_header_oscore(oscore, msg->partialIV, msg->partialIVLen, sender->idContext, sender->idContextLen, sender->senderId, sender->senderIdLen);
