@@ -161,5 +161,5 @@ typedef struct oscore_message {
 // Message
 // keep in mind that payload of msg->packet will be overriden, save it if it must be freed afterwards
 // new payload will be allocated with OSCORE_MALLOC!
-int oscore_message_setup(oscore_context_t * ctx, oscore_sender_context_t * sender, oscore_message_t * msg);
+int oscore_message_transform(oscore_context_t * ctx, oscore_sender_context_t * sender, oscore_message_t * msg);
 #endif

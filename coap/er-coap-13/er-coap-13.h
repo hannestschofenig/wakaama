@@ -125,7 +125,8 @@ typedef enum {
   COAP_GET = 1,
   COAP_POST,
   COAP_PUT,
-  COAP_DELETE
+  COAP_DELETE,
+  COAP_FETCH
 } coap_method_t;
 
 /* CoAP response codes */

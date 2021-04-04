@@ -519,7 +519,8 @@ static int oscore_move_EOptions(coap_packet_t * unprotected, coap_packet_t * pro
             break;
 
             default:
-
+            // TODO handle all unknown options as protected options..
+            // maybe add a function to coap library to create a list of all options...
             LOG("Unsupported option");
         }
     }   
@@ -527,18 +528,33 @@ static int oscore_move_EOptions(coap_packet_t * unprotected, coap_packet_t * pro
     return 0;
 }
 
-int oscore_message_setup(oscore_context_t * ctx, oscore_sender_context_t * sender, oscore_message_t * msg) {
+int oscore_message_transform(oscore_context_t * ctx, oscore_sender_context_t * sender, oscore_message_t * msg) {
     if(ctx == NULL || sender == NULL || msg == NULL) {
         return -1;
     }
-    memset(msg->partialIV, 0, 8);
-    ntworder(msg->partialIV, &sender->senderSequenceNumber, 8);
-    for(int i = 7; i >= 0; i--) {
-        if(msg->partialIV[i] != 0) {
-            msg->partialIVLen = 8 - i;
-        }
+
+    coap_packet_t * oscore = (coap_packet_t *)msg->packet;
+    coap_packet_t coap_pkt;
+    bool isResponse = false;
+    uint8_t code = COAP_POST;
+
+    if(oscore->code != COAP_GET && oscore->code != COAP_POST && oscore->code != COAP_PUT && oscore->code != COAP_DELETE){
+        code = CHANGED_2_04;
+        isResponse = true;
     }
-    memmove(msg->partialIV, msg->partialIV+8-msg->partialIVLen, msg->partialIVLen);
+
+    if(isResponse) { // partial IV must not be calculated
+        memset(msg->partialIV, 0, 8);
+        ntworder(msg->partialIV, &sender->senderSequenceNumber, 8);
+        for(int i = 7; i >= 0; i--) {
+            if(msg->partialIV[i] != 0) {
+                msg->partialIVLen = 8 - i;
+                i = -1;
+            }
+        }
+        memmove(msg->partialIV, msg->partialIV+8-msg->partialIVLen, msg->partialIVLen);
+    }
+    
     uint8_t nonce[OSCORE_MAXNONCELEN];
     int ret = oscore_derive_nonce(sender->senderId, sender->senderIdLen, sender->commonIV, sender->nonceLen, msg->partialIV, msg->partialIVLen, nonce);
     if(ret < 0) {
@@ -550,9 +566,8 @@ int oscore_message_setup(oscore_context_t * ctx, oscore_sender_context_t * sende
         LOG("aead algorithm not defined");
         return -1;
     }
-    coap_packet_t * oscore = (coap_packet_t *)msg->packet;
-    coap_packet_t coap_pkt;
-    uint8_t code = COAP_POST; //TODO distinguish between Requests and Responses (COAP_204_CHANGED) and notifications
+    
+
     coap_init_message(&coap_pkt, oscore->type, oscore->code, oscore->mid);
     coap_set_payload(&coap_pkt, oscore->payload, oscore->payload_len);
 
@@ -623,7 +638,15 @@ int oscore_message_setup(oscore_context_t * ctx, oscore_sender_context_t * sende
     OSCORE_FREE(serializedCoap);
     
     coap_set_payload(oscore, out, parameters.plaintextLen + aead->relatingCipherTextLen);
-    coap_set_header_oscore(oscore, msg->partialIV, msg->partialIVLen, sender->idContext, sender->idContextLen, sender->senderId, sender->senderIdLen);
-    sender->senderSequenceNumber++;
+
+    if(isResponse) {
+        coap_set_header_oscore(oscore, NULL, 0, sender->idContext, sender->idContextLen, NULL, 0);
+    }
+    else {
+        coap_set_header_oscore(oscore, msg->partialIV, msg->partialIVLen, sender->idContext, sender->idContextLen, sender->senderId, sender->senderIdLen);
+        sender->senderSequenceNumber++;
+    }
+    
+    
     return 0;
 }
