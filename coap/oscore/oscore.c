@@ -65,7 +65,9 @@ int coap_parse_oscore_option(void * packet, uint8_t const * value, uint32_t cons
     // first header byte must be added as well
     uint32_t maxLength = 1;
     int idx = 0;
-
+    if(optionLength == 0){
+        return 0;
+    }
     if(optionLength > OSCORE_OPTION_VALUE_MAXLEN) {
         return BAD_OPTION_4_02;
     }
@@ -76,6 +78,7 @@ int coap_parse_oscore_option(void * packet, uint8_t const * value, uint32_t cons
     kidLen -= coap_pkt->oscore_partialIVLen;
     maxLength += coap_pkt->oscore_partialIVLen;
     if((value[0] & 0x10)) { // kid context available
+        coap_pkt->oscore_kidContext = OSCORE_EMPTY_ENTRY;
         coap_pkt->oscore_kidContextLen = value[1+coap_pkt->oscore_partialIVLen];
         kidLen -= (coap_pkt->oscore_kidContextLen + 1);
         maxLength += (coap_pkt->oscore_kidContextLen + 1);
@@ -84,6 +87,7 @@ int coap_parse_oscore_option(void * packet, uint8_t const * value, uint32_t cons
         if(kidLen < 0) {
             return BAD_OPTION_4_02;
         }
+        coap_pkt->oscore_kid = OSCORE_EMPTY_ENTRY;
         coap_pkt->oscore_kidLen = kidLen;
         maxLength += coap_pkt->oscore_kidLen;
     }
@@ -499,12 +503,13 @@ static coap_option_t const OSCORE_E_OPTIONS[] = {
 static coap_option_t const OSCORE_U_OPTIONS[] = {
     COAP_OPTION_URI_HOST,
     COAP_OPTION_URI_PORT,
+    COAP_OPTION_OSCORE,
     COAP_OPTION_PROXY_URI,
     COAP_OPTION_PROXY_SCHEME
 };
 
 static bool oscore_internal_is_EOption(coap_option_t op) {
-    for(size_t i = 0; i < sizeof(OSCORE_U_OPTIONS); i++) {
+    for(size_t i = 0; i < sizeof(OSCORE_U_OPTIONS)/sizeof(coap_option_t); i++) {
         if(op == OSCORE_U_OPTIONS[i]) {
             return false;
         }
@@ -513,7 +518,7 @@ static bool oscore_internal_is_EOption(coap_option_t op) {
 }
 
 static coap_option_t oscore_internal_get_next_EOption(coap_packet_t * packet) {
-    for(size_t i = 0; i < sizeof(OSCORE_E_OPTIONS); i++) {
+    for(size_t i = 0; i < sizeof(OSCORE_E_OPTIONS)/sizeof(coap_option_t); i++) {
         if(IS_OPTION(packet, OSCORE_E_OPTIONS[i])) {
             return OSCORE_E_OPTIONS[i];
         }
@@ -542,6 +547,38 @@ static int oscore_move_EOptions(coap_packet_t * unprotected, coap_packet_t * pro
     return 0;
 }
 
+static void oscore_internal_u64_to_partialIV(uint64_t v, uint8_t * partialIV, size_t * partialIVLen) {
+#ifdef LWM2M_BIG_ENDIAN
+    uint8_t * ptr = (uint8_t*)&v;
+    int i = 0;
+    *partialIVLen = 0;
+    while(i < sizeof(uint64_t) && *partialIVLen == 0) {
+        if(ptr[i] != 0) {
+            *partialIVLen = sizeof(uint64_t) - i;
+        }
+        i++;
+    }
+    memcpy(partialIV, ptr+sizeof(uint64_t)-*partialIVLen, *partialIVLen);
+#else
+    ntworder(partialIV, &v, 8);
+    for(int i = 7; i >= 0; i--) {
+        if(partialIV[i] != 0) {
+            *partialIVLen = 8 - i;
+            i = -1;
+        }
+    }
+    memmove(partialIV, partialIV+8-*partialIVLen, *partialIVLen);
+#endif
+}
+
+static void oscore_internal_u64_from_partialIV(uint64_t * v, uint8_t const * partialIV, size_t partialIVLen) {
+#ifdef LWM2M_BIG_ENDIAN
+    memcpy(((uint8_t*)v)+sizeof(uint64_t)-partialIVLen, partialIV, partialIVLen);
+#else
+    ntworder((uint8_t*)v, (uint8_t*)partialIV, partialIVLen);
+#endif
+}
+
 int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sender, oscore_message_t * msg) {
     if(ctx == NULL || sender == NULL || msg == NULL) {
         return -1;
@@ -557,6 +594,7 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sen
     coap_packet_t coap_pkt;
     bool isResponse = false;
     uint8_t code = COAP_POST;
+    // todo add support to OBSERVE option
 
     if(oscore->code != COAP_GET && oscore->code != COAP_POST && oscore->code != COAP_PUT && oscore->code != COAP_DELETE){
         code = CHANGED_2_04;
@@ -569,14 +607,7 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sen
             return -1;
         }
         memset(msg->partialIV, 0, 8);
-        ntworder(msg->partialIV, &sender->senderSequenceNumber, 8);
-        for(int i = 7; i >= 0; i--) {
-            if(msg->partialIV[i] != 0) {
-                msg->partialIVLen = 8 - i;
-                i = -1;
-            }
-        }
-        memmove(msg->partialIV, msg->partialIV+8-msg->partialIVLen, msg->partialIVLen);
+        oscore_internal_u64_to_partialIV(sender->senderSequenceNumber, msg->partialIV, &(msg->partialIVLen));
         if(sender->senderSequenceNumber == 0){
             msg->partialIVLen = 1;
         }
@@ -774,11 +805,11 @@ static int oscore_option_itor_init(oscore_option_itor_t * itor, uint8_t * buffer
     if(length < 4) {
         return -1;
     }
-    int tokenlength = buffer[0] & 0x0F;
+    uint8_t tokenlength = buffer[0] & 0x0F;
     if(tokenlength > 8) {
         return -1;
     }
-    if(length < 4 + tokenlength) {
+    if(length < (size_t)(4 + tokenlength)) {
         return -1;
     }
     itor->buffer = buffer;
@@ -793,7 +824,7 @@ static int oscore_option_itor_next(oscore_option_itor_t * itor) {
         itor->option = OPTION_MAX_VALUE;
         return 0;
     }
-    if(itor->beginOption - itor->buffer >= itor->length) {
+    if(itor->beginOption - itor->buffer >= (int)itor->length) {
         itor->option = OPTION_MAX_VALUE;
         return 0;
     }
@@ -804,7 +835,7 @@ static int oscore_option_itor_next(oscore_option_itor_t * itor) {
         return -1;
     }
     uint8_t * pos = itor->beginOption;
-    uint16_t * v = NULL;
+
     uint16_t delta = optionDelta;
     uint16_t length = optionLength;
     pos++;
@@ -856,9 +887,6 @@ int oscore_is_oscore_message(uint8_t const * buffer, size_t length) {
     return ret;
 }
 
-/*extern size_t
-coap_serialize_int_option(unsigned int number, unsigned int current_number, uint8_t *buffer, uint32_t value);*/
-
 static int oscore_internal_remove_EOptions(uint8_t * input, size_t const length) {
     oscore_option_itor_t itor;
     if(oscore_option_itor_init(&itor, input, length) != 0){
@@ -866,41 +894,210 @@ static int oscore_internal_remove_EOptions(uint8_t * input, size_t const length)
         return -1;
     }
     int ret = 0;
-    coap_option_t option = 0;
-    oscore_option_itor_t lastOption;
+    int subLength = 0;
+    coap_option_t prevOption = 0;
+    oscore_option_itor_t nextOption;
+    memset(&nextOption, 0, sizeof(oscore_option_itor_t));
 
     while((ret = oscore_option_itor_next(&itor)) == 1) {
-        uint32_t delta = itor.option - option;
+        
         if(oscore_internal_is_EOption(itor.option)) {
-            memmove(itor.nextOption, itor.beginOption, length - (itor.beginOption - input));
+            // must be removed
+            memcpy(&nextOption, &itor, sizeof(oscore_option_itor_t));
+            int r = oscore_option_itor_next(&nextOption);
+            if(r == -1) {
+                LOG("Invalid format");
+                return -1;
+            }
+            if(r == 0)  {// end reached
+                memmove(itor.beginOption, nextOption.beginOption, length - (nextOption.beginOption - input));
+                itor.nextOption = itor.beginOption;
+            }
+            else {
+                uint32_t delta = nextOption.option - prevOption;
+                size_t written = coap_set_option_header(delta, nextOption.valueLength, itor.beginOption);
+                memmove(itor.beginOption + written, nextOption.value, (input + length) - nextOption.value);
+                itor.nextOption = itor.beginOption;// + written + nextOption.valueLength;
+                itor.option = prevOption;
+            }
+            
+            subLength = subLength + (nextOption.beginOption - itor.beginOption);
+            
         }
-        option = itor.option;
+        prevOption = itor.option;
     }
     if(ret == -1) {
         LOG("Invalid CoAP format");
         return -1;
     }
-    return 0;
+    return length - subLength;
+}
+
+static bool oscore_internal_verify_replaywindow(oscore_recipient_context_t * recipient, uint64_t sequenceNumber) {
+    if(sequenceNumber + OSCORE_REPLAY_WINDOW_SIZE <= recipient->highestValidatedSequenceNumber) {
+        return false;
+    }
+    return true;
+}
+
+static void oscore_internal_update_replaywindow(oscore_recipient_context_t * recipient, uint64_t sequenceNumber) {
+
 }
 
 int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg, uint8_t * input, size_t length) {
-
+    if(ctx == NULL || msg == NULL || msg->packet == NULL || input == NULL || length < 4) {
+        return -1;
+    }
     // remove all outer options which are class E
     int newlength = oscore_internal_remove_EOptions(input, length);
-    // get recipient data of oscore option value
-
+    if(newlength <= 0) {
+        LOG("Could not parse received oscore message");
+        return -1;
+    }
+    coap_status_t coapRet = coap_parse_message(msg->packet, input, newlength);
+    if(coapRet != NO_ERROR) {
+        LOG("Could not parse message");
+        return -1;
+    }
+    bool isResponse = false;
+    coap_packet_t * packet = (coap_packet_t *)msg->packet;
+    if(packet->code == CHANGED_2_04) {
+        isResponse = true;
+    }
+    
+    // get recipient data of oscore option value (when request) or of token (when response, todo)
     // get recipient context based on id and id context
+    cose_aead_alg_t * aead = NULL;
+    oscore_recipient_context_t * recipient = oscore_find_recipient(ctx->recipient, packet->oscore_kid, packet->oscore_kidLen, packet->oscore_kidContext, packet->oscore_kidContextLen);
+    uint64_t sequenceNumber = 0;
+    if(!isResponse) {
+        if(packet->oscore_partialIV == NULL || packet->oscore_partialIVLen == 0) {
+            LOG("No partial IV encoded in oscore request");
+            return OSCORE_DECOMPRESS_FAILED;
+        }
+        memset(msg->partialIV, 0, 8);
+        memcpy(msg->partialIV, packet->oscore_partialIV, packet->oscore_partialIVLen);
+        oscore_internal_u64_from_partialIV(&sequenceNumber, packet->oscore_partialIV, packet->oscore_partialIVLen);
+        // todo verify multiple recipients, because there could be multiple context with same kid
+        if(recipient == NULL) {
+            LOG("Recipient context not available");
+            return OSCORE_COULD_NOT_FIND_RECIPIENT;
+        }
+        // verify replay window
+        if(!oscore_internal_verify_replaywindow(recipient, sequenceNumber)) {
+            LOG("Replay detected");
+            return OSCORE_REPLAY_DETECTED;
+        }
+        aead = cose_aead_algorithm_find(&ctx->cose, recipient->aeadAlgId);
+    }
 
-    // verify replay window
+    if(aead == NULL) {
+        LOG("Unsupported aead algorithm");
+        return -1;
+    }
+    if(aead->keyLen != recipient->recipientKeyLen || aead->nonceMin != recipient->nonceLen) {
+        LOG("Keylen or Noncelen are not equal");
+        return -1;
+    }
+    
+    // compute nonce
+    uint8_t nonce[OSCORE_MAXNONCELEN];
+    int ret = 0;
+    
+    if(!isResponse) { 
+        ret = oscore_derive_nonce(recipient->recipientId, recipient->recipientIdLen, recipient->commonIV, recipient->nonceLen, packet->oscore_partialIV, packet->oscore_partialIVLen, nonce);
+    }
+
+    if(ret < 0){
+        LOG("Unexpected error");
+        return -1;
+    }
 
     // compose AAD
+    int aadLen = 0;
+    uint8_t * aad = NULL;
+    if(!isResponse) {
+        aadLen = oscore_additional_authenticated_data_get_size(recipient->aeadAlgId, recipient->recipientId, recipient->recipientIdLen, packet->oscore_partialIV, packet->oscore_partialIVLen);
+    }
 
-    // compute nonce
+    if(aadLen <= 0) {
+        return -1;
+    }
+    aad = OSCORE_MALLOC(aadLen);
+    if(aad == NULL) {
+        LOG("Out of memory");
+        return -1;
+    }
+
+    if(!isResponse) {
+        aadLen = oscore_additional_authenticated_data_serialize(aad, aadLen, recipient->aeadAlgId, recipient->recipientId, recipient->recipientIdLen, packet->oscore_partialIV, packet->oscore_partialIVLen);
+    }
 
     // decrypt
+    cose_aead_parameters_t par;
+    memset(&par, 0, sizeof(cose_aead_parameters_t));
+    par.plaintext = OSCORE_MALLOC(packet->payload_len - aead->relatingCipherTextLen);
+    if(par.plaintext == NULL){
+        OSCORE_FREE(aad);
+        LOG("Out of memory");
+        return -1;
+    }
+    par.plaintextLen = packet->payload_len - aead->relatingCipherTextLen;
+    if(!isResponse) {
+        par.key.key = (uint8_t*)recipient->recipientKey;
+        par.key.keyLen = recipient->recipientKeyLen;
+    }
+    
+    par.nonce = nonce;
+    par.nonceLen = aead->nonceMin;
+    par.aadEncoded = aad;
+    par.aadLen = aadLen;
+
+    cose_error_t cose_ret = aead->decrypt(&par, NULL, packet->payload, packet->payload_len);
 
     // update replay window
+    if(!isResponse) {
+        oscore_internal_update_replaywindow(recipient, sequenceNumber);
+    }
 
+    OSCORE_FREE(aad);
+    if(cose_ret != COSE_OK){
+        OSCORE_FREE(par.plaintext);
+        return OSCORE_VERIFICATION_FAILED;
+    }
+    
     // update coap msg with decrypted information
-    return -1;
+    packet->code = par.plaintext[0];
+    oscore_option_itor_t itor; //oscore_option_itor_init cant be used as it checks complete coap header
+    memset(&itor, 0, sizeof(oscore_option_itor_t));
+    itor.nextOption = par.plaintext + 1;
+    itor.buffer = par.plaintext + 1;
+    itor.length = par.plaintextLen - 1;
+
+    while((ret = oscore_option_itor_next(&itor)) == 1) {
+        if(coap_parse_option(packet, itor.option, (uint8_t*)itor.value, itor.valueLength) != NO_ERROR) {
+            LOG("Could not parse options");
+            OSCORE_FREE(par.plaintext);
+            return -1;
+        }
+    }
+
+    if(ret != 0) {
+        LOG("Invalid format in CoAP Message");
+        OSCORE_FREE(par.plaintext);
+        return -1;
+    }
+
+    packet->buffer = par.plaintext;
+    if(itor.nextOption < par.plaintext + par.plaintextLen) {
+        packet->payload = itor.nextOption + 1;
+        packet->payload_len = par.plaintext + par.plaintextLen - packet->payload;
+    }
+    else{
+        packet->payload = NULL;
+        packet->payload_len = 0;
+    }
+    
+
+    return newlength;
 }

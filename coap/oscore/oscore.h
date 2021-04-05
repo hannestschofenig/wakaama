@@ -11,6 +11,7 @@
 #define OSCORE_PARTIALIV_MAXLEN 5
 #define OSCORE_SENDERSEQUENCENUMBER_MAX (uint64_t)((uint64_t)(1) << 40)
 #define OSCORE_OPTION_VALUE_MAXLEN 255
+#define OSCORE_REPLAY_WINDOW_SIZE 32
 
 // special ptr to serialize empty id in option value
 #define OSCORE_EMPTY_ENTRY (void*)0xFF
@@ -178,6 +179,15 @@ typedef struct oscore_sender_context {
     uint64_t senderSequenceNumber;
 } oscore_sender_context_t;
 
+typedef struct oscore_request_mapping {
+    struct oscore_request_mapping * next;
+    oscore_sender_context_t const * ctx;
+    uint64_t token;
+    uint8_t partialIV[8];
+    uint8_t partialIVLen;
+    uint8_t tokenLen;
+} oscore_request_mapping_t;
+
 typedef struct oscore_message {
     void * packet; // coap msg
 
@@ -203,9 +213,12 @@ int oscore_is_oscore_message(uint8_t const * buffer, size_t length);
 #define OSCORE_DECOMPRESS_FAILED -2
 #define OSCORE_COULD_NOT_FIND_RECIPIENT -3
 #define OSCORE_VERIFICATION_FAILED -4
+#define OSCORE_REPLAY_DETECTED -5
 // before calling decrypt function, verify message is a oscore message
-// prepoulate packet of msg with a ptr to a coap_structure
+// prepoulate packet of msg with a coap_message_t
 // populates id, partialIV of msg
 // verifies and updates recipient context replay window
+// packet->buffer is allocated with OSCORE_MALLOC
+// buffer of input must be valid as long as packet must be valid
 int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg, uint8_t * input, size_t length);
 #endif

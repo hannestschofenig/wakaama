@@ -948,7 +948,6 @@ static void test_oscore_message_test_vector4_request_client() {
 
     CU_ASSERT_EQUAL(oscore_message_encrypt(&ctx, &sender, &oscore_msg), 0);
 
-    size_t ret = coap_serialize_message(&coap_msg, serializedOscore);
     CU_ASSERT_EQUAL(coap_serialize_message(&coap_msg, serializedOscore), 35);
 
     CU_ASSERT_ARRAY_EQUAL(serializedOscore, expectedOscore, 35);
@@ -1250,17 +1249,53 @@ static void test_oscore_message_test_vector8_response_server() {
 
 
 static void temp_test() {
-    coap_packet_t packet;
-    coap_init_message(&packet, COAP_TYPE_CON, COAP_GET, 0x1234);
 
-    coap_set_header_uri_host(&packet, "localhost");
-    coap_set_header_content_type(&packet, APPLICATION_LINK_FORMAT);
-    coap_set_header_oscore(&packet, NULL, 0, NULL, 0, NULL, 0);
+    oscore_context_t ctx;
+    oscore_init(&ctx);
+    
 
-    uint8_t message[128];
-    int ret = coap_serialize_message(&packet, message);
+    coap_packet_t coap_msg;
+    memset(&coap_msg, 0, sizeof(coap_packet_t));
+    oscore_message_t oscore_msg;
+    memset(&oscore_msg, 0, sizeof(oscore_message_t));
+    oscore_msg.packet = &coap_msg;
 
-    oscore_is_oscore_message(message, ret);
+    uint8_t const recipientKey[16] = {
+        0xf0, 0x91, 0x0e, 0xd7, 0x29, 0x5e, 0x6a, 0xd4,
+        0xb5, 0x4f, 0xc7, 0x93, 0x15, 0x43, 0x02, 0xff
+    };
+
+    uint8_t const commonIV[13] = {
+        0x46, 0x22, 0xd4, 0xdd, 0x6d, 0x94, 0x41, 0x68,
+        0xee, 0xfb, 0x54, 0x98, 0x7c
+    };
+
+    cn_cbor aeadAlg;
+    memset(&aeadAlg, 0, sizeof(cn_cbor));
+    aeadAlg.type = CN_CBOR_UINT;
+    aeadAlg.v.uint = COSE_ALGO_AES_CCM_16_64_128;
+
+    oscore_recipient_context_t recipient;
+    memset(&recipient, 0, sizeof(oscore_recipient_context_t));
+    recipient.recipientKey = recipientKey;
+    recipient.recipientKeyLen = sizeof(recipientKey);
+    recipient.commonIV = commonIV;
+    recipient.nonceLen = sizeof(commonIV);
+    recipient.aeadAlgId = &aeadAlg;
+    recipient.highestValidatedSequenceNumber = 0;
+    ctx.recipient = &recipient;
+
+
+    uint8_t oscoremsg[35] = {
+        0x44, 0x02, 0x5d, 0x1f, 0x00, 0x00, 0x39, 0x74, 0x39,
+        0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x68, 0x6f, 0x73, 0x74,
+        0x62, 0x09, 0x14, 0xff, 0x61, 0x2f, 0x10, 0x92, 0xf1,
+        0x77, 0x6f, 0x1c, 0x16, 0x68, 0xb3, 0x82, 0x5e
+    };
+
+    oscore_message_decrypt(&ctx, &oscore_msg, oscoremsg, sizeof(oscoremsg));
+
+    oscore_free(&ctx);
 }
 
 static struct TestTable table[] = {

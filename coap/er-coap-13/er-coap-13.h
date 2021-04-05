@@ -349,6 +349,7 @@ uint16_t coap_get_mid(void);
 void coap_init_message(void *packet, coap_message_type_t type, uint8_t code, uint16_t mid);
 size_t coap_serialize_get_size(void *packet);
 size_t coap_serialize_message(void *packet, uint8_t *buffer);
+coap_status_t coap_parse_option(void * request, coap_option_t option, uint8_t * current_option, uint16_t option_length);
 coap_status_t coap_parse_message(void *request, uint8_t *data, uint16_t data_len);
 void coap_free_header(void *packet);
 
@@ -425,5 +426,7 @@ int coap_set_header_size(void *packet, uint32_t size);
 
 int coap_get_payload(void *packet, const uint8_t **payload);
 int coap_set_payload(void *packet, const void *payload, size_t length);
+
+size_t coap_set_option_header(unsigned int delta, size_t length, uint8_t *buffer);
 
 #endif /* COAP_13_H_ */

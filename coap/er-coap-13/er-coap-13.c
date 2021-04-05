@@ -116,7 +116,6 @@ coap_option_nibble(unsigned int value)
   }
 }
 /*-----------------------------------------------------------------------------------*/
-static
 size_t
 coap_set_option_header(unsigned int delta, size_t length, uint8_t *buffer)
 {
@@ -707,108 +706,14 @@ coap_serialize_message(void *packet, uint8_t *buffer)
   return (option - buffer) + coap_pkt->payload_len; /* packet length */
 }
 /*-----------------------------------------------------------------------------------*/
+
 coap_status_t
-coap_parse_message(void *packet, uint8_t *data, uint16_t data_len)
+coap_parse_option(void * packet, coap_option_t option, uint8_t * current_option, uint16_t option_length)
 {
-  coap_packet_t *const coap_pkt = (coap_packet_t *) packet;
-  uint8_t *current_option;
-  uint32_t option_number = 0;
-  uint32_t option_delta = 0;
-  uint32_t option_length = 0;
-  uint32_t *x;
+    coap_packet_t *const coap_pkt = (coap_packet_t *) packet;
+    SET_OPTION(coap_pkt, option);
 
-  /* Initialize packet */
-  memset(coap_pkt, 0, sizeof(coap_packet_t));
-
-  /* pointer to packet bytes */
-  coap_pkt->buffer = data;
-
-  /* parse header fields */
-  coap_pkt->version = (COAP_HEADER_VERSION_MASK & coap_pkt->buffer[0])>>COAP_HEADER_VERSION_POSITION;
-  coap_pkt->type = (coap_message_type_t) ((COAP_HEADER_TYPE_MASK & coap_pkt->buffer[0])>>COAP_HEADER_TYPE_POSITION);
-  coap_pkt->token_len = MIN(COAP_TOKEN_LEN, (COAP_HEADER_TOKEN_LEN_MASK & coap_pkt->buffer[0])>>COAP_HEADER_TOKEN_LEN_POSITION);
-  coap_pkt->code = coap_pkt->buffer[1];
-  coap_pkt->mid = coap_pkt->buffer[2]<<8 | coap_pkt->buffer[3];
-
-  if (coap_pkt->version != 1)
-  {
-    coap_error_message = "CoAP version must be 1";
-    return BAD_REQUEST_4_00;
-  }
-
-  current_option = data + COAP_HEADER_LEN;
-
-  if (coap_pkt->token_len != 0)
-  {
-      memcpy(coap_pkt->token, current_option, coap_pkt->token_len);
-      SET_OPTION(coap_pkt, COAP_OPTION_TOKEN);
-
-      PRINTF("Token (len %u) [0x%02X%02X%02X%02X%02X%02X%02X%02X]\n", coap_pkt->token_len,
-        coap_pkt->token[0],
-        coap_pkt->token[1],
-        coap_pkt->token[2],
-        coap_pkt->token[3],
-        coap_pkt->token[4],
-        coap_pkt->token[5],
-        coap_pkt->token[6],
-        coap_pkt->token[7]
-      ); /*FIXME always prints 8 bytes */
-  }
-
-  /* parse options */
-  current_option += coap_pkt->token_len;
-
-  while (current_option < data+data_len)
-  {
-    /* Payload marker 0xFF, currently only checking for 0xF* because rest is reserved */
-    if ((current_option[0] & 0xF0)==0xF0)
-    {
-      coap_pkt->payload = ++current_option;
-      coap_pkt->payload_len = data_len - (coap_pkt->payload - data);
-
-      break;
-    }
-
-    option_delta = current_option[0]>>4;
-    option_length = current_option[0] & 0x0F;
-    ++current_option;
-
-    /* avoids code duplication without function overhead */
-    x = &option_delta;
-    do
-    {
-      if (*x==13)
-      {
-        *x += current_option[0];
-        ++current_option;
-      }
-      else if (*x==14)
-      {
-        *x += 255;
-        *x += current_option[0]<<8;
-        ++current_option;
-        *x += current_option[0];
-        ++current_option;
-      }
-    }
-    while (x != &option_length && (x = &option_length));
-
-    option_number += option_delta;
-
-    if (current_option + option_length > data + data_len)
-    {
-        PRINTF("OPTION %u (delta %u, len %u) has invalid length.\n", option_number, option_delta, option_length);
-        coap_free_header(coap_pkt);
-        return BAD_REQUEST_4_00;
-    }
-    else
-    {
-        PRINTF("OPTION %u (delta %u, len %u): ", option_number, option_delta, option_length);
-    }
-
-    SET_OPTION(coap_pkt, option_number);
-
-    switch (option_number)
+    switch (option)
     {
       case COAP_OPTION_CONTENT_TYPE:
         coap_pkt->content_type = (coap_content_type_t) coap_parse_int_option(current_option, option_length);
@@ -930,7 +835,6 @@ coap_parse_message(void *packet, uint8_t *data, uint16_t data_len)
         if(coap_parse_oscore_option(coap_pkt, current_option, option_length) != 0){
             PRINTF("could not parse oscore option value\n");
             coap_error_message = "Invalid oscore option value";
-            coap_free_header(coap_pkt);
             return BAD_OPTION_4_02;
         }
         break;
@@ -938,12 +842,119 @@ coap_parse_message(void *packet, uint8_t *data, uint16_t data_len)
       default:
         PRINTF("unknown (%u)\n", option_number);
         /* Check if critical (odd) */
-        if (option_number & 1)
+        if (option & 1)
         {
           coap_error_message = "Unsupported critical option";
-          coap_free_header(coap_pkt);
           return BAD_OPTION_4_02;
         }
+    }
+    return NO_ERROR;
+}
+
+coap_status_t
+coap_parse_message(void *packet, uint8_t *data, uint16_t data_len)
+{
+  coap_packet_t *const coap_pkt = (coap_packet_t *) packet;
+  uint8_t *current_option;
+  uint32_t option_number = 0;
+  uint32_t option_delta = 0;
+  uint32_t option_length = 0;
+  uint32_t *x;
+  coap_status_t option_ret;
+
+  /* Initialize packet */
+  memset(coap_pkt, 0, sizeof(coap_packet_t));
+
+  /* pointer to packet bytes */
+  coap_pkt->buffer = data;
+
+  /* parse header fields */
+  coap_pkt->version = (COAP_HEADER_VERSION_MASK & coap_pkt->buffer[0])>>COAP_HEADER_VERSION_POSITION;
+  coap_pkt->type = (coap_message_type_t) ((COAP_HEADER_TYPE_MASK & coap_pkt->buffer[0])>>COAP_HEADER_TYPE_POSITION);
+  coap_pkt->token_len = MIN(COAP_TOKEN_LEN, (COAP_HEADER_TOKEN_LEN_MASK & coap_pkt->buffer[0])>>COAP_HEADER_TOKEN_LEN_POSITION);
+  coap_pkt->code = coap_pkt->buffer[1];
+  coap_pkt->mid = coap_pkt->buffer[2]<<8 | coap_pkt->buffer[3];
+
+  if (coap_pkt->version != 1)
+  {
+    coap_error_message = "CoAP version must be 1";
+    return BAD_REQUEST_4_00;
+  }
+
+  current_option = data + COAP_HEADER_LEN;
+
+  if (coap_pkt->token_len != 0)
+  {
+      memcpy(coap_pkt->token, current_option, coap_pkt->token_len);
+      SET_OPTION(coap_pkt, COAP_OPTION_TOKEN);
+
+      PRINTF("Token (len %u) [0x%02X%02X%02X%02X%02X%02X%02X%02X]\n", coap_pkt->token_len,
+        coap_pkt->token[0],
+        coap_pkt->token[1],
+        coap_pkt->token[2],
+        coap_pkt->token[3],
+        coap_pkt->token[4],
+        coap_pkt->token[5],
+        coap_pkt->token[6],
+        coap_pkt->token[7]
+      ); /*FIXME always prints 8 bytes */
+  }
+
+  /* parse options */
+  current_option += coap_pkt->token_len;
+
+  while (current_option < data+data_len)
+  {
+    /* Payload marker 0xFF, currently only checking for 0xF* because rest is reserved */
+    if ((current_option[0] & 0xF0)==0xF0)
+    {
+      coap_pkt->payload = ++current_option;
+      coap_pkt->payload_len = data_len - (coap_pkt->payload - data);
+
+      break;
+    }
+
+    option_delta = current_option[0]>>4;
+    option_length = current_option[0] & 0x0F;
+    ++current_option;
+
+    /* avoids code duplication without function overhead */
+    x = &option_delta;
+    do
+    {
+      if (*x==13)
+      {
+        *x += current_option[0];
+        ++current_option;
+      }
+      else if (*x==14)
+      {
+        *x += 255;
+        *x += current_option[0]<<8;
+        ++current_option;
+        *x += current_option[0];
+        ++current_option;
+      }
+    }
+    while (x != &option_length && (x = &option_length));
+
+    option_number += option_delta;
+
+    if (current_option + option_length > data + data_len)
+    {
+        PRINTF("OPTION %u (delta %u, len %u) has invalid length.\n", option_number, option_delta, option_length);
+        coap_free_header(coap_pkt);
+        return BAD_REQUEST_4_00;
+    }
+    else
+    {
+        PRINTF("OPTION %u (delta %u, len %u): ", option_number, option_delta, option_length);
+    }
+
+    option_ret = coap_parse_option(coap_pkt, option_number, current_option, option_length);
+    if(option_ret != NO_ERROR){
+        coap_free_header(coap_pkt);
+        return option_ret;
     }
 
     current_option += option_length;
