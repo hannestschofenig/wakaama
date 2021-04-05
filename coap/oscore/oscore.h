@@ -44,8 +44,8 @@
               *option = coap_pkt->oscore_kid[i]; \
               option++; \
           } \
-          current_number = number; \
       } \
+      current_number = number; \
     }
 
 
@@ -198,11 +198,14 @@ typedef struct oscore_message {
 // new payload will be allocated with OSCORE_MALLOC!
 int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sender, oscore_message_t * msg);
 
+// checks if a received message is an oscore message
+int oscore_is_oscore_message(uint8_t const * buffer, size_t length);
 #define OSCORE_DECOMPRESS_FAILED -2
 #define OSCORE_COULD_NOT_FIND_RECIPIENT -3
 #define OSCORE_VERIFICATION_FAILED -4
+// before calling decrypt function, verify message is a oscore message
 // prepoulate packet of msg with a ptr to a coap_structure
 // populates id, partialIV of msg
 // verifies and updates recipient context replay window
-int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg, uint8_t * input, size_t const length);
+int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg, uint8_t * input, size_t length);
 #endif

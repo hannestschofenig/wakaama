@@ -496,6 +496,22 @@ static coap_option_t const OSCORE_E_OPTIONS[] = {
     COAP_OPTION_BLOCK1,
 };
 
+static coap_option_t const OSCORE_U_OPTIONS[] = {
+    COAP_OPTION_URI_HOST,
+    COAP_OPTION_URI_PORT,
+    COAP_OPTION_PROXY_URI,
+    COAP_OPTION_PROXY_SCHEME
+};
+
+static bool oscore_internal_is_EOption(coap_option_t op) {
+    for(size_t i = 0; i < sizeof(OSCORE_U_OPTIONS); i++) {
+        if(op == OSCORE_U_OPTIONS[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static coap_option_t oscore_internal_get_next_EOption(coap_packet_t * packet) {
     for(size_t i = 0; i < sizeof(OSCORE_E_OPTIONS); i++) {
         if(IS_OPTION(packet, OSCORE_E_OPTIONS[i])) {
@@ -586,6 +602,10 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sen
         return -1;
     }
     
+    if(aead->keyLen != sender->senderKeyLen || aead->nonceMin != sender->nonceLen) {
+        LOG("invalid security context with aead algorithm");
+        return -1;
+    }
 
     coap_init_message(&coap_pkt, oscore->type, oscore->code, oscore->mid);
     coap_set_payload(&coap_pkt, oscore->payload, oscore->payload_len);
@@ -698,18 +718,175 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sen
 }
 
 int oscore_add_recipient(oscore_context_t * ctx, oscore_common_context_t const * commonCtx, oscore_derived_context_t const * derivedCtx, oscore_recipient_context_t * recipient) {
-    return -1;
+    if(ctx == NULL || commonCtx == NULL || derivedCtx == NULL || recipient == NULL) {
+        return -1;
+    }
+    memset(recipient, 0, sizeof(oscore_recipient_context_t));
+    recipient->recipientId = commonCtx->recipientId;
+    recipient->recipientIdLen = commonCtx->recipientIdLen;
+    recipient->idContext = commonCtx->idContext;
+    recipient->idContextLen = commonCtx->idContextLen;
+    recipient->aeadAlgId = &commonCtx->aeadAlgId;
+    recipient->recipientKey = derivedCtx->recipientKey;
+    recipient->recipientKeyLen = derivedCtx->keyLen;
+    recipient->commonIV = derivedCtx->commonIV;
+    recipient->nonceLen = derivedCtx->nonceLen;
+
+    // add to list
+    recipient->next = ctx->recipient;
+    ctx->recipient = recipient;
+
+    return 0;
 }
 
 oscore_recipient_context_t * oscore_find_recipient(oscore_recipient_context_t * begin, uint8_t const * id, size_t idLen, uint8_t const * idContext, size_t idContextLen) {
-    return NULL;
+    oscore_recipient_context_t * matchId = NULL;
+    while(begin != NULL) {
+        if(begin->recipientIdLen == idLen){
+            if(memcmp(begin->recipientId, id, idLen) == 0) {
+                if(matchId == NULL) {
+                    matchId = begin;
+                }
+                if(begin->idContextLen == idContextLen && memcmp(begin->idContext, idContext, idContextLen) ==0) { // complete match
+                    return begin;
+                }
+            }
+        }
+        begin = begin->next;
+    }
+    // if no complete match was found try with security context with matching id
+    return matchId;
 }
 
+typedef struct oscore_option_itor{
+    uint8_t const * value;
+    uint16_t valueLength;
+    coap_option_t option;
+    uint8_t * beginOption;
 
+    uint8_t * nextOption;
+    size_t length;
+    uint8_t * buffer;
+} oscore_option_itor_t;
 
-int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg, uint8_t * input, size_t const length) {
+static int oscore_option_itor_init(oscore_option_itor_t * itor, uint8_t * buffer, size_t length) {
+    memset(itor, 0, sizeof(oscore_option_itor_t));
+    if(length < 4) {
+        return -1;
+    }
+    int tokenlength = buffer[0] & 0x0F;
+    if(tokenlength > 8) {
+        return -1;
+    }
+    if(length < 4 + tokenlength) {
+        return -1;
+    }
+    itor->buffer = buffer;
+    itor->length = length;
+    itor->nextOption = buffer + 4 + tokenlength;
+    return 0;
+}
+
+static int oscore_option_itor_next(oscore_option_itor_t * itor) {
+    itor->beginOption = itor->nextOption;
+    if(*(itor->beginOption) == 0xFF) {
+        itor->option = OPTION_MAX_VALUE;
+        return 0;
+    }
+    if(itor->beginOption - itor->buffer >= itor->length) {
+        itor->option = OPTION_MAX_VALUE;
+        return 0;
+    }
+    uint8_t const optionDelta = (*(itor->beginOption) & 0xF0) >> 4;
+    uint8_t const optionLength = *(itor->beginOption) & 0x0F;
+    if(optionDelta == 0x0F || optionLength == 0x0F) {
+        // invalid format
+        return -1;
+    }
+    uint8_t * pos = itor->beginOption;
+    uint16_t * v = NULL;
+    uint16_t delta = optionDelta;
+    uint16_t length = optionLength;
+    pos++;
+    if(optionDelta == 13) {
+        delta = (*pos) + 13;
+        pos++;
+    }
+    else if(optionDelta == 14) {
+        ntworder((uint8_t*)&delta, pos, 2);
+        delta += 269;
+        pos += 2;
+    }
+    if(optionLength == 13) {
+        length = (*pos) + 13;
+        pos++;
+    }
+    else if(optionLength == 14) {
+        ntworder((uint8_t*)&length, pos, 2);
+        length += 269;
+        pos += 2;
+    }
+    itor->option = itor->option + delta;
+    itor->valueLength = optionLength;
+    itor->value = pos;
+    itor->nextOption = pos + optionLength;
+
+    return 1;
+}
+
+int oscore_is_oscore_message(uint8_t const * buffer, size_t length) {
+    if((buffer[0] & 0x40) != 0x40){
+        return -2; //invalid CoAP Version
+    }
+    oscore_option_itor_t itor;
+    if(oscore_option_itor_init(&itor, (uint8_t*)buffer, length) != 0){
+        LOG("Received invalid CoAP Header");
+        return -1;
+    }
+    int ret = 0;
+    while((ret = oscore_option_itor_next(&itor)) == 1) {
+        if(itor.option == COAP_OPTION_OSCORE) {
+            return 1;
+        }
+    }
+    if(ret == -1) {
+        LOG("Invalid CoAP format");
+        return -1;
+    }
+    return ret;
+}
+
+/*extern size_t
+coap_serialize_int_option(unsigned int number, unsigned int current_number, uint8_t *buffer, uint32_t value);*/
+
+static int oscore_internal_remove_EOptions(uint8_t * input, size_t const length) {
+    oscore_option_itor_t itor;
+    if(oscore_option_itor_init(&itor, input, length) != 0){
+        LOG("Received invalid CoAP Header");
+        return -1;
+    }
+    int ret = 0;
+    coap_option_t option = 0;
+    oscore_option_itor_t lastOption;
+
+    while((ret = oscore_option_itor_next(&itor)) == 1) {
+        uint32_t delta = itor.option - option;
+        if(oscore_internal_is_EOption(itor.option)) {
+            memmove(itor.nextOption, itor.beginOption, length - (itor.beginOption - input));
+        }
+        option = itor.option;
+    }
+    if(ret == -1) {
+        LOG("Invalid CoAP format");
+        return -1;
+    }
+    return 0;
+}
+
+int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg, uint8_t * input, size_t length) {
+
     // remove all outer options which are class E
-
+    int newlength = oscore_internal_remove_EOptions(input, length);
     // get recipient data of oscore option value
 
     // get recipient context based on id and id context

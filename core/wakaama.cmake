@@ -22,9 +22,9 @@ set(WAKAAMA_SOURCES
     ${WAKAAMA_SOURCES_DIR}/internals.h)
 
 # This will not work for multi project cmake generators like the Visual Studio Generator
-if(CMAKE_BUILD_TYPE MATCHES Debug)
-   set(WAKAAMA_DEFINITIONS ${WAKAAMA_DEFINITIONS} -DLWM2M_WITH_LOGS)
-endif()
+#if(CMAKE_BUILD_TYPE MATCHES Debug)
+#   set(WAKAAMA_DEFINITIONS ${WAKAAMA_DEFINITIONS} -DLWM2M_WITH_LOGS)
+#endif()
 
 # Automatically determine endianess. This can be overwritten by setting LWM2M_LITTLE_ENDIAN
 # accordingly in a cross compile toolchain file.

@@ -190,6 +190,7 @@ typedef enum {
   COAP_OPTION_BLOCK1 = 27,        /* 1-3 B */
   COAP_OPTION_SIZE = 28,          /* 0-4 B */
   COAP_OPTION_PROXY_URI = 35,     /* 1-270 B */
+  COAP_OPTION_PROXY_SCHEME = 39,
   OPTION_MAX_VALUE = 0xFFFF
 } coap_option_t;
 

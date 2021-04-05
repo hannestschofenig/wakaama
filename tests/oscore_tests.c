@@ -948,6 +948,7 @@ static void test_oscore_message_test_vector4_request_client() {
 
     CU_ASSERT_EQUAL(oscore_message_encrypt(&ctx, &sender, &oscore_msg), 0);
 
+    size_t ret = coap_serialize_message(&coap_msg, serializedOscore);
     CU_ASSERT_EQUAL(coap_serialize_message(&coap_msg, serializedOscore), 35);
 
     CU_ASSERT_ARRAY_EQUAL(serializedOscore, expectedOscore, 35);
@@ -1247,6 +1248,21 @@ static void test_oscore_message_test_vector8_response_server() {
     oscore_free(&ctx);
 }
 
+
+static void temp_test() {
+    coap_packet_t packet;
+    coap_init_message(&packet, COAP_TYPE_CON, COAP_GET, 0x1234);
+
+    coap_set_header_uri_host(&packet, "localhost");
+    coap_set_header_content_type(&packet, APPLICATION_LINK_FORMAT);
+    coap_set_header_oscore(&packet, NULL, 0, NULL, 0, NULL, 0);
+
+    uint8_t message[128];
+    int ret = coap_serialize_message(&packet, message);
+
+    oscore_is_oscore_message(message, ret);
+}
+
 static struct TestTable table[] = {
         // CoAP Option tests
         { "[OPTION] cant add Partial IV longer than 5 bytes", test_oscore_cant_add_PartialIV_longer_5 },
@@ -1295,6 +1311,8 @@ static struct TestTable table[] = {
         { "[MSG] test vector 6 OSCORE Request, Client", test_oscore_message_test_vector6_request_client },
         { "[MSG] test vector 7 OSCORE Response, Server", test_oscore_message_test_vector7_response_server },
         { "[MSG] test vector 8 OSCORE Response, Server", test_oscore_message_test_vector8_response_server },
+
+        { "", temp_test },
         { NULL, NULL },
 };
 
