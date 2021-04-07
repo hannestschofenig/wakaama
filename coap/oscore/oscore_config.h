@@ -11,7 +11,8 @@
 #define OSCORE_HKDF_MAXLEN 32
 
 
-
+#define OSCORE_MALLOC(size) lwm2m_malloc(size)
+#define OSCORE_FREE(ptr) lwm2m_free(ptr)
 
 
 

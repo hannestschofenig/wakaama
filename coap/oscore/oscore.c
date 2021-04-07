@@ -16,6 +16,84 @@ static void ntworder(uint8_t * buffer, void * insert, size_t const size) {
 #endif
 }
 
+typedef struct oscore_option_itor{
+    uint8_t const * value;
+    uint16_t valueLength;
+    coap_option_t option;
+    uint8_t * beginOption;
+
+    uint8_t * nextOption;
+    size_t length;
+    uint8_t * buffer;
+} oscore_option_itor_t;
+
+static int oscore_option_itor_init(oscore_option_itor_t * itor, uint8_t * buffer, size_t length) {
+    memset(itor, 0, sizeof(oscore_option_itor_t));
+    if(length < 4) {
+        return -1;
+    }
+    uint8_t tokenlength = buffer[0] & 0x0F;
+    if(tokenlength > 8) {
+        return -1;
+    }
+    if(length < (size_t)(4 + tokenlength)) {
+        return -1;
+    }
+    itor->buffer = buffer;
+    itor->length = length;
+    itor->nextOption = buffer + 4 + tokenlength;
+    return 0;
+}
+
+static int oscore_option_itor_next(oscore_option_itor_t * itor) {
+    itor->beginOption = itor->nextOption;
+    if(*(itor->beginOption) == 0xFF) {
+        itor->option = OPTION_MAX_VALUE;
+        return 0;
+    }
+    if(itor->beginOption - itor->buffer >= (int)itor->length) {
+        itor->option = OPTION_MAX_VALUE;
+        return 0;
+    }
+    uint8_t const optionDelta = (*(itor->beginOption) & 0xF0) >> 4;
+    uint8_t const optionLength = *(itor->beginOption) & 0x0F;
+    if(optionDelta == 0x0F || optionLength == 0x0F) {
+        // invalid format
+        return -1;
+    }
+    uint8_t * pos = itor->beginOption;
+
+    uint16_t delta = optionDelta;
+    uint16_t length = optionLength;
+    pos++;
+    if(optionDelta == 13) {
+        delta = (*pos) + 13;
+        pos++;
+    }
+    else if(optionDelta == 14) {
+        ntworder((uint8_t*)&delta, pos, 2);
+        delta += 269;
+        pos += 2;
+    }
+    if(optionLength == 13) {
+        length = (*pos) + 13;
+        pos++;
+    }
+    else if(optionLength == 14) {
+        ntworder((uint8_t*)&length, pos, 2);
+        length += 269;
+        pos += 2;
+    }
+    itor->option = itor->option + delta;
+    itor->valueLength = optionLength;
+    itor->value = pos;
+    itor->nextOption = pos + optionLength;
+
+    return 1;
+}
+
+
+
 int coap_set_header_oscore(void * packet, uint8_t const * partialIV, uint8_t partialIVLen, uint8_t const * kidContext, uint8_t kidContextLen, uint8_t const * kid, uint8_t kidLen) {
     coap_packet_t *const coap_pkt = (coap_packet_t *) packet;
     size_t maxLength = 1 + partialIVLen;
@@ -246,6 +324,11 @@ void oscore_free(oscore_context_t * ctx) {
     oscore_backend_free(ctx);
 #endif
     cose_free(&ctx->cose);
+    while(ctx->request != NULL) {
+        oscore_request_mapping_t * del = ctx->request;
+        ctx->request = del->next;
+        OSCORE_FREE(del);
+    }
 }
 
 int oscore_hkdf_algorithm_add(oscore_context_t * ctx, oscore_hkdf_alg_t * hkdf) {
@@ -526,27 +609,6 @@ static coap_option_t oscore_internal_get_next_EOption(coap_packet_t * packet) {
     return OPTION_MAX_VALUE;
 }
 
-static int oscore_move_EOptions(coap_packet_t * unprotected, coap_packet_t * protectedMsg) {
-    coap_option_t option;
-    while((option = oscore_internal_get_next_EOption(unprotected)) != OPTION_MAX_VALUE) {
-        REMOVE_OPTION(unprotected, option);
-        switch(option) {
-            case COAP_OPTION_URI_PATH:
-                protectedMsg->uri_path = unprotected->uri_path;
-                unprotected->uri_path = NULL;
-                SET_OPTION(protectedMsg, option);
-            break;
-
-            default:
-            // TODO handle all unknown options as protected options..
-            // maybe add a function to coap library to create a list of all options...
-            LOG("Unsupported option");
-        }
-    }   
-
-    return 0;
-}
-
 static void oscore_internal_u64_to_partialIV(uint64_t v, uint8_t * partialIV, size_t * partialIVLen) {
 #ifdef LWM2M_BIG_ENDIAN
     uint8_t * ptr = (uint8_t*)&v;
@@ -579,48 +641,66 @@ static void oscore_internal_u64_from_partialIV(uint64_t * v, uint8_t const * par
 #endif
 }
 
-int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sender, oscore_message_t * msg) {
-    if(ctx == NULL || sender == NULL || msg == NULL) {
+int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
+    if(ctx == NULL || msg == NULL) {
         return -1;
     }
-    if(msg->partialIVLen > OSCORE_PARTIALIV_MAXLEN) {
+    if(msg->buffer == NULL) {
         return -1;
     }
-    uint8_t requestPIV[OSCORE_PARTIALIV_MAXLEN];
-    size_t requestPIVLen = msg->partialIVLen;
-    memcpy(requestPIV, msg->partialIV, msg->partialIVLen);
+    
+    uint8_t piv[OSCORE_PARTIALIV_MAXLEN];
+    memset(piv,0,OSCORE_PARTIALIV_MAXLEN);
+    size_t piv_len = 0;
+    oscore_security_context_t * sender = msg->recipient->sender;
 
-    coap_packet_t * oscore = (coap_packet_t *)msg->packet;
+    if(sender->senderSequenceNumber > OSCORE_SENDERSEQUENCENUMBER_MAX) {
+        LOG("Sender sequence number out of range");
+        return -1;
+    }
+
     coap_packet_t coap_pkt;
+    coap_packet_t oscore;
     bool isResponse = false;
-    uint8_t code = COAP_POST;
+    uint8_t oscore_code = COAP_POST;
+    int ret = 0;
+    oscore_option_itor_t itor;
+    if(oscore_option_itor_init(&itor, msg->buffer, msg->length) != 0){
+        LOG("Invalid CoAP message");
+        return -1;
+    }
+    uint8_t coap_code = msg->buffer[1];
+    uint8_t type = (msg->buffer[0] & 0x30)>>4;
+    uint16_t msgId = 0;
+    ntworder((uint8_t*)&msgId, msg->buffer + 2, 2);
+    coap_init_message(&coap_pkt, type, coap_code, msgId);
+    coap_init_message(&oscore, type, coap_code, msgId);
+    uint8_t tokenLen = msg->buffer[0] & 0x0F;
+    uint8_t * token = msg->buffer+4;
+    coap_set_header_token(&oscore, token, tokenLen);
+    
     // todo add support to OBSERVE option
 
-    if(oscore->code != COAP_GET && oscore->code != COAP_POST && oscore->code != COAP_PUT && oscore->code != COAP_DELETE){
-        code = CHANGED_2_04;
+    if(coap_code != COAP_GET && coap_code != COAP_POST && coap_code != COAP_PUT && coap_code != COAP_DELETE){
+        oscore_code = CHANGED_2_04;
         isResponse = true;
     }
 
     if(!isResponse || msg->generatePartialIV) { // partial IV must be calculated
-        if(sender->senderSequenceNumber > OSCORE_SENDERSEQUENCENUMBER_MAX) {
-            LOG("Sender sequence number out of range");
-            return -1;
-        }
-        memset(msg->partialIV, 0, 8);
-        oscore_internal_u64_to_partialIV(sender->senderSequenceNumber, msg->partialIV, &(msg->partialIVLen));
+        memset(piv, 0, 8);
+        oscore_internal_u64_to_partialIV(sender->senderSequenceNumber, piv, &(piv_len));
         if(sender->senderSequenceNumber == 0){
-            msg->partialIVLen = 1;
+            piv_len = 1;
         }
     }
     
     uint8_t nonce[OSCORE_MAXNONCELEN];
-    int ret = 0;
 
     if(!isResponse || msg->generatePartialIV) { // use sender id
-        ret = oscore_derive_nonce(sender->senderId, sender->senderIdLen, sender->commonIV, sender->nonceLen, msg->partialIV, msg->partialIVLen, nonce);
+        ret = oscore_derive_nonce(sender->senderId, sender->senderIdLen, sender->commonIV, sender->nonceLen, piv, piv_len, nonce);
     }
     else { // use recipient id
-        ret = oscore_derive_nonce(msg->id, msg->idLen, sender->commonIV, sender->nonceLen, msg->partialIV, msg->partialIVLen, nonce);
+        ret = oscore_derive_nonce(msg->recipient->recipientId, msg->recipient->recipientIdLen, sender->commonIV, sender->nonceLen, msg->partialIV, msg->partialIVLen, nonce);
     }
     
     if(ret < 0) {
@@ -638,32 +718,57 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sen
         return -1;
     }
 
-    coap_init_message(&coap_pkt, oscore->type, oscore->code, oscore->mid);
-    coap_set_payload(&coap_pkt, oscore->payload, oscore->payload_len);
+    coap_set_status_code(&oscore, oscore_code);
 
-    coap_set_status_code(oscore, code);
+    while((ret = oscore_option_itor_next(&itor)) == 1) {
+        if(oscore_internal_is_EOption(itor.option)) {
+            if(coap_parse_option(&coap_pkt, itor.option, (uint8_t*)itor.value, itor.valueLength)!= NO_ERROR) {
+                coap_free_header(&oscore);
+                coap_free_header(&coap_pkt);
+                LOG("Invalid CoAP option");
+                return -1;
+            }
+        }
+        else if(itor.option == COAP_OPTION_OSCORE) {
+            coap_free_header(&oscore);
+            coap_free_header(&coap_pkt);
+            LOG("OSCORE option in CoAP message found");
+            return -1;
+        }
+        else if(coap_parse_option(&oscore, itor.option, (uint8_t*)itor.value, itor.valueLength) != NO_ERROR) {
+            coap_free_header(&oscore);
+            coap_free_header(&coap_pkt);
+            LOG("Invalid CoAP Option");
+            return -1;
+        }
+    }
 
-    if(oscore_move_EOptions(oscore, &coap_pkt) != 0) {
-        LOG("Could not move options");
+    if(ret != 0) {
+        coap_free_header(&oscore);
+        coap_free_header(&coap_pkt);
+        LOG("Invalid CoAP message");
         return -1;
+    }
+
+    int payloadLen = msg->length - (itor.beginOption + 1 - msg->buffer);
+    if(payloadLen > 0){
+        coap_set_payload(&coap_pkt, itor.beginOption + 1, payloadLen);
     }
 
     ret = coap_serialize_get_size(&coap_pkt);
-    if(ret <= 0){
-        LOG("Could not calculate size of coap message");
-        return -1;
-    }
     int sizeCoap = ret;
 
     if(isResponse) {
-        ret = oscore_additional_authenticated_data_serialize(NULL, 0, sender->aeadAlgId, msg->id, msg->idLen, requestPIV, requestPIVLen);
+        ret = oscore_additional_authenticated_data_serialize(NULL, 0, sender->aeadAlgId, msg->recipient->recipientId, msg->recipient->recipientIdLen, msg->partialIV, msg->partialIVLen);
     }
     else {
-        ret = oscore_additional_authenticated_data_serialize(NULL, 0, sender->aeadAlgId, sender->senderId, sender->senderIdLen, msg->partialIV, msg->partialIVLen);
+        ret = oscore_additional_authenticated_data_serialize(NULL, 0, sender->aeadAlgId, sender->senderId, sender->senderIdLen, piv, piv_len);
     }
     
     
     if(ret <= 0) {
+        coap_free_header(&oscore);
+        coap_free_header(&coap_pkt);
         LOG("Could not serialize AAD");
         return -1;
     }
@@ -671,24 +776,29 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sen
     uint8_t * aad = OSCORE_MALLOC(aadLen);
         
     if(aad == NULL) {
+        coap_free_header(&oscore);
+        coap_free_header(&coap_pkt);
         LOG("Out of memory");
         return -1;
     }
     uint8_t * serializedCoap = OSCORE_MALLOC(sizeCoap);
     if(serializedCoap == NULL){
+        coap_free_header(&oscore);
+        coap_free_header(&coap_pkt);
         LOG("Out of memory");
         OSCORE_FREE(aad);
         return -1;
     }
 
     if(isResponse) {
-        aadLen = oscore_additional_authenticated_data_serialize(aad, aadLen, sender->aeadAlgId, msg->id, msg->idLen, requestPIV, requestPIVLen);
+        aadLen = oscore_additional_authenticated_data_serialize(aad, aadLen, sender->aeadAlgId, msg->recipient->recipientId, msg->recipient->recipientIdLen, msg->partialIV, msg->partialIVLen);
     }
     else {
-        aadLen = oscore_additional_authenticated_data_serialize(aad, aadLen, sender->aeadAlgId, sender->senderId, sender->senderIdLen, msg->partialIV, msg->partialIVLen);
+        aadLen = oscore_additional_authenticated_data_serialize(aad, aadLen, sender->aeadAlgId, sender->senderId, sender->senderIdLen, piv, piv_len);
     }
     
     sizeCoap = coap_serialize_message(&coap_pkt, serializedCoap);
+    coap_free_header(&coap_pkt);
     
     memmove(serializedCoap, serializedCoap+1, 1); // move code
     memmove(serializedCoap+1,serializedCoap+4, sizeCoap-4); // move options and payload
@@ -706,6 +816,7 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sen
 
     uint8_t * out = OSCORE_MALLOC(parameters.plaintextLen + aead->relatingCipherTextLen);
     if(out == NULL) {
+        coap_free_header(&oscore);
         OSCORE_FREE(aad);
         OSCORE_FREE(serializedCoap);
         LOG("Out of memory");
@@ -713,6 +824,8 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sen
     }
 
     if(aead->encrypt(&parameters, NULL, out) != COSE_OK){
+        coap_free_header(&oscore);
+        OSCORE_FREE(out);
         OSCORE_FREE(aad);
         OSCORE_FREE(serializedCoap);
         LOG("Could not encrypt message");
@@ -721,15 +834,15 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sen
     OSCORE_FREE(aad);
     OSCORE_FREE(serializedCoap);
     
-    coap_set_payload(oscore, out, parameters.plaintextLen + aead->relatingCipherTextLen);
+    coap_set_payload(&oscore, out, parameters.plaintextLen + aead->relatingCipherTextLen);
 
     if(isResponse) {
         if(msg->generatePartialIV) {
-            coap_set_header_oscore(oscore, msg->partialIV, msg->partialIVLen, sender->idContext, sender->idContextLen, NULL, 0);
+            coap_set_header_oscore(&oscore, piv, piv_len, sender->idContext, sender->idContextLen, NULL, 0);
             sender->senderSequenceNumber++;
         }
         else{
-            coap_set_header_oscore(oscore, NULL, 0, NULL, 0, NULL, 0);
+            coap_set_header_oscore(&oscore, NULL, 0, NULL, 0, NULL, 0);
         }
         
     }
@@ -740,129 +853,82 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sen
             senderId = sender->senderId;
             senderIdLen = sender->senderIdLen;
         }
-        coap_set_header_oscore(oscore, msg->partialIV, msg->partialIVLen, sender->idContext, sender->idContextLen, senderId, senderIdLen);
+        coap_set_header_oscore(&oscore, piv, piv_len, sender->idContext, sender->idContextLen, senderId, senderIdLen);
         sender->senderSequenceNumber++;
     }
     
-    
+    sizeCoap = coap_serialize_get_size(&oscore);
+
+    uint8_t * oscore_out = OSCORE_MALLOC(sizeCoap);
+    if(oscore_out == NULL){
+        coap_free_header(&oscore);
+        OSCORE_FREE(out);
+        LOG("Ouf of memory");
+        return -1;
+    }
+    sizeCoap = coap_serialize_message(&oscore, oscore_out);
+    coap_free_header(&oscore);
+    OSCORE_FREE(out);
+    if(!isResponse) {
+        oscore_request_mapping_t * mapping = (oscore_request_mapping_t*)OSCORE_MALLOC(sizeof(oscore_request_mapping_t));
+        if(mapping == NULL){
+            LOG("Out of memory");
+            OSCORE_FREE(oscore_out);
+            return -1;
+        }
+        mapping->recipient = msg->recipient;
+        memcpy(mapping->partialIV, piv, piv_len);
+        memcpy(mapping->token, token, tokenLen);
+        mapping->partialIVLen = piv_len;
+        mapping->tokenLen = tokenLen;
+        mapping->timeout = time(NULL) + COAP_MAX_RTT;
+        mapping->next = ctx->request;
+        ctx->request = mapping;
+    }
+    msg->buffer = oscore_out;
+    msg->length = sizeCoap;
     return 0;
 }
 
-int oscore_add_recipient(oscore_context_t * ctx, oscore_common_context_t const * commonCtx, oscore_derived_context_t const * derivedCtx, oscore_recipient_context_t * recipient) {
-    if(ctx == NULL || commonCtx == NULL || derivedCtx == NULL || recipient == NULL) {
+
+int oscore_add_security_ctx(oscore_context_t * ctx, oscore_common_context_t const * commonCtx, oscore_derived_context_t const * derivedCtx, oscore_security_context_t * security) {
+    if(ctx == NULL || commonCtx == NULL || derivedCtx == NULL || security == NULL) {
         return -1;
     }
-    memset(recipient, 0, sizeof(oscore_recipient_context_t));
-    recipient->recipientId = commonCtx->recipientId;
-    recipient->recipientIdLen = commonCtx->recipientIdLen;
-    recipient->idContext = commonCtx->idContext;
-    recipient->idContextLen = commonCtx->idContextLen;
-    recipient->aeadAlgId = &commonCtx->aeadAlgId;
-    recipient->recipientKey = derivedCtx->recipientKey;
-    recipient->recipientKeyLen = derivedCtx->keyLen;
-    recipient->commonIV = derivedCtx->commonIV;
-    recipient->nonceLen = derivedCtx->nonceLen;
+
+    memset(security, 0, sizeof(oscore_security_context_t));
+    security->senderId = commonCtx->senderId;
+    security->senderIdLen = commonCtx->senderIdLen;
+    security->idContext = commonCtx->idContext;
+    security->idContextLen = commonCtx->idContextLen;
+    security->aeadAlgId = &commonCtx->aeadAlgId;
+    security->senderKey = derivedCtx->senderKey;
+    security->senderKeyLen = derivedCtx->keyLen;
+    security->commonIV = derivedCtx->commonIV;
+    security->nonceLen = derivedCtx->nonceLen;
 
     // add to list
+    security->next = ctx->security;
+    ctx->security = security;
+
+    return 0;
+}
+
+int oscore_add_recipient_ctx(oscore_context_t * ctx, oscore_common_context_t const * commonCtx, oscore_derived_context_t const * derivedCtx, oscore_security_context_t * security, oscore_recipient_t * recipient) {
+    if(ctx == NULL || commonCtx == NULL || derivedCtx == NULL || security == NULL || recipient == NULL) {
+        return -1;
+    }
+
+    recipient->sender = security;
+    recipient->recipientId = commonCtx->recipientId;
+    recipient->recipientIdLen = commonCtx->recipientIdLen;
+    recipient->recipientKey = derivedCtx->recipientKey;
+    recipient->recipientKeyLen = derivedCtx->keyLen;
+
     recipient->next = ctx->recipient;
-    ctx->recipient = recipient;
+    ctx->recipient = recipient->next;
 
     return 0;
-}
-
-oscore_recipient_context_t * oscore_find_recipient(oscore_recipient_context_t * begin, uint8_t const * id, size_t idLen, uint8_t const * idContext, size_t idContextLen) {
-    oscore_recipient_context_t * matchId = NULL;
-    while(begin != NULL) {
-        if(begin->recipientIdLen == idLen){
-            if(memcmp(begin->recipientId, id, idLen) == 0) {
-                if(matchId == NULL) {
-                    matchId = begin;
-                }
-                if(begin->idContextLen == idContextLen && memcmp(begin->idContext, idContext, idContextLen) ==0) { // complete match
-                    return begin;
-                }
-            }
-        }
-        begin = begin->next;
-    }
-    // if no complete match was found try with security context with matching id
-    return matchId;
-}
-
-typedef struct oscore_option_itor{
-    uint8_t const * value;
-    uint16_t valueLength;
-    coap_option_t option;
-    uint8_t * beginOption;
-
-    uint8_t * nextOption;
-    size_t length;
-    uint8_t * buffer;
-} oscore_option_itor_t;
-
-static int oscore_option_itor_init(oscore_option_itor_t * itor, uint8_t * buffer, size_t length) {
-    memset(itor, 0, sizeof(oscore_option_itor_t));
-    if(length < 4) {
-        return -1;
-    }
-    uint8_t tokenlength = buffer[0] & 0x0F;
-    if(tokenlength > 8) {
-        return -1;
-    }
-    if(length < (size_t)(4 + tokenlength)) {
-        return -1;
-    }
-    itor->buffer = buffer;
-    itor->length = length;
-    itor->nextOption = buffer + 4 + tokenlength;
-    return 0;
-}
-
-static int oscore_option_itor_next(oscore_option_itor_t * itor) {
-    itor->beginOption = itor->nextOption;
-    if(*(itor->beginOption) == 0xFF) {
-        itor->option = OPTION_MAX_VALUE;
-        return 0;
-    }
-    if(itor->beginOption - itor->buffer >= (int)itor->length) {
-        itor->option = OPTION_MAX_VALUE;
-        return 0;
-    }
-    uint8_t const optionDelta = (*(itor->beginOption) & 0xF0) >> 4;
-    uint8_t const optionLength = *(itor->beginOption) & 0x0F;
-    if(optionDelta == 0x0F || optionLength == 0x0F) {
-        // invalid format
-        return -1;
-    }
-    uint8_t * pos = itor->beginOption;
-
-    uint16_t delta = optionDelta;
-    uint16_t length = optionLength;
-    pos++;
-    if(optionDelta == 13) {
-        delta = (*pos) + 13;
-        pos++;
-    }
-    else if(optionDelta == 14) {
-        ntworder((uint8_t*)&delta, pos, 2);
-        delta += 269;
-        pos += 2;
-    }
-    if(optionLength == 13) {
-        length = (*pos) + 13;
-        pos++;
-    }
-    else if(optionLength == 14) {
-        ntworder((uint8_t*)&length, pos, 2);
-        length += 269;
-        pos += 2;
-    }
-    itor->option = itor->option + delta;
-    itor->valueLength = optionLength;
-    itor->value = pos;
-    itor->nextOption = pos + optionLength;
-
-    return 1;
 }
 
 int oscore_is_oscore_message(uint8_t const * buffer, size_t length) {
@@ -933,83 +999,159 @@ static int oscore_internal_remove_EOptions(uint8_t * input, size_t const length)
     return length - subLength;
 }
 
-static bool oscore_internal_verify_replaywindow(oscore_recipient_context_t * recipient, uint64_t sequenceNumber) {
-    if(sequenceNumber + OSCORE_REPLAY_WINDOW_SIZE <= recipient->highestValidatedSequenceNumber) {
+static bool oscore_internal_verify_replaywindow(oscore_security_context_t * security, uint64_t sequenceNumber) {
+    if(sequenceNumber + OSCORE_REPLAY_WINDOW_SIZE <= security->highestValidatedSequenceNumber) {
         return false;
+    }
+    if(sequenceNumber < security->highestValidatedSequenceNumber) {
+        uint64_t diff = security->highestValidatedSequenceNumber - sequenceNumber;
+        if((security->replayWindow & (1 << (diff - 1))) != 0){
+            return false;
+        }
     }
     return true;
 }
 
-static void oscore_internal_update_replaywindow(oscore_recipient_context_t * recipient, uint64_t sequenceNumber) {
-
+static void oscore_internal_update_replaywindow(oscore_security_context_t * security, uint64_t sequenceNumber) {
+    if(security->highestValidatedSequenceNumber < sequenceNumber) {
+        uint64_t diff = sequenceNumber - security->highestValidatedSequenceNumber;
+        security->replayWindow = security->replayWindow << diff;
+        if(security->highestValidatedSequenceNumber + OSCORE_REPLAY_WINDOW_SIZE > sequenceNumber) {
+            security->replayWindow |= (1 << (diff-1));
+        }
+        security->highestValidatedSequenceNumber = sequenceNumber;
+    }
+    else {
+        uint64_t diff = security->highestValidatedSequenceNumber - sequenceNumber;
+        security->replayWindow |= (1<<diff);
+    }
 }
 
-int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg, uint8_t * input, size_t length) {
-    if(ctx == NULL || msg == NULL || msg->packet == NULL || input == NULL || length < 4) {
+oscore_recipient_t * oscore_find_recipient(oscore_recipient_t * begin, uint8_t const * kid, size_t kidLen, uint8_t const * idContext, size_t idContextLen) {
+    oscore_recipient_t * kidMatch = NULL;
+    while(begin != NULL){
+        if(kidLen == begin->recipientIdLen && memcmp(kid, begin->recipientId, kidLen) == 0) {
+            if(idContext == NULL && kidMatch == NULL) { // there was no idContext supplied, it could be a match
+                kidMatch = begin;
+            }
+            if(idContextLen == begin->sender->idContextLen && memcmp(idContext, begin->sender->idContext, idContextLen) == 0) {
+                // return exact match
+                return begin;
+            }
+        }
+
+        begin = begin->next;
+    }
+    return kidMatch;
+}
+
+int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg) {
+    if(ctx == NULL || msg == NULL  || msg->buffer == NULL || msg->length < 4) {
         return -1;
     }
     // remove all outer options which are class E
-    int newlength = oscore_internal_remove_EOptions(input, length);
+    int newlength = oscore_internal_remove_EOptions(msg->buffer, msg->length);
     if(newlength <= 0) {
         LOG("Could not parse received oscore message");
         return -1;
     }
-    coap_status_t coapRet = coap_parse_message(msg->packet, input, newlength);
+    coap_packet_t packet;
+    coap_status_t coapRet = coap_parse_message(&packet, msg->buffer, newlength);
     if(coapRet != NO_ERROR) {
         LOG("Could not parse message");
         return -1;
     }
     bool isResponse = false;
-    coap_packet_t * packet = (coap_packet_t *)msg->packet;
-    if(packet->code == CHANGED_2_04) {
+    if(packet.code == CHANGED_2_04) {
         isResponse = true;
     }
+    // remove option of message
+    REMOVE_OPTION(&packet, COAP_OPTION_OSCORE);
     
-    // get recipient data of oscore option value (when request) or of token (when response, todo)
+    // get recipient data of oscore option value (when request) or of token (when response)
     // get recipient context based on id and id context
     cose_aead_alg_t * aead = NULL;
-    oscore_recipient_context_t * recipient = oscore_find_recipient(ctx->recipient, packet->oscore_kid, packet->oscore_kidLen, packet->oscore_kidContext, packet->oscore_kidContextLen);
+    oscore_recipient_t * recipient = NULL;
+    oscore_request_mapping_t * request = NULL;
     uint64_t sequenceNumber = 0;
+    uint8_t const * partialIV = NULL;
+    size_t partialIVLen = 0;
     if(!isResponse) {
-        if(packet->oscore_partialIV == NULL || packet->oscore_partialIVLen == 0) {
+        if(packet.oscore_partialIV == NULL || packet.oscore_partialIVLen == 0) {
             LOG("No partial IV encoded in oscore request");
             return OSCORE_DECOMPRESS_FAILED;
         }
-        memset(msg->partialIV, 0, 8);
-        memcpy(msg->partialIV, packet->oscore_partialIV, packet->oscore_partialIVLen);
-        oscore_internal_u64_from_partialIV(&sequenceNumber, packet->oscore_partialIV, packet->oscore_partialIVLen);
+        recipient = oscore_find_recipient(ctx->recipient, packet.oscore_kid, packet.oscore_kidLen, packet.oscore_kidContext, packet.oscore_kidContextLen);
         // todo verify multiple recipients, because there could be multiple context with same kid
         if(recipient == NULL) {
+            coap_free_header(&packet);
             LOG("Recipient context not available");
             return OSCORE_COULD_NOT_FIND_RECIPIENT;
         }
+    }
+    else {
+        request = oscore_find_request(ctx->request, packet.token, packet.token_len);
+        if(request == NULL){
+            LOG("No request was send");
+            coap_free_header(&packet);
+            return OSCORE_COULD_NOT_FIND_RECIPIENT;
+        }
+        recipient = request->recipient;
+        if(packet.oscore_partialIVLen != 0) {
+            partialIV = packet.oscore_partialIV;
+            partialIVLen = packet.oscore_partialIVLen;
+        }
+        else {
+            partialIV = request->partialIV;
+            partialIVLen = request->partialIVLen;
+        }
+    }
+
+    if(packet.oscore_partialIVLen != 0) {
+        memset(msg->partialIV, 0, 8);
+        memcpy(msg->partialIV, packet.oscore_partialIV, packet.oscore_partialIVLen);
+        msg->partialIVLen = packet.oscore_partialIVLen;
+        oscore_internal_u64_from_partialIV(&sequenceNumber, packet.oscore_partialIV, packet.oscore_partialIVLen);
         // verify replay window
-        if(!oscore_internal_verify_replaywindow(recipient, sequenceNumber)) {
+        if(!oscore_internal_verify_replaywindow(recipient->sender, sequenceNumber)) {
             LOG("Replay detected");
+            coap_free_header(&packet);
             return OSCORE_REPLAY_DETECTED;
         }
-        aead = cose_aead_algorithm_find(&ctx->cose, recipient->aeadAlgId);
+        partialIV = msg->partialIV;
+        partialIVLen = msg->partialIVLen;
     }
+
+    msg->recipient = recipient;
+
+    aead = cose_aead_algorithm_find(&ctx->cose, recipient->sender->aeadAlgId);
 
     if(aead == NULL) {
         LOG("Unsupported aead algorithm");
+        coap_free_header(&packet);
         return -1;
     }
-    if(aead->keyLen != recipient->recipientKeyLen || aead->nonceMin != recipient->nonceLen) {
+
+    if(aead->keyLen != recipient->recipientKeyLen || aead->nonceMin != recipient->sender->nonceLen) {
         LOG("Keylen or Noncelen are not equal");
+        coap_free_header(&packet);
         return -1;
     }
     
     // compute nonce
     uint8_t nonce[OSCORE_MAXNONCELEN];
     int ret = 0;
-    
-    if(!isResponse) { 
-        ret = oscore_derive_nonce(recipient->recipientId, recipient->recipientIdLen, recipient->commonIV, recipient->nonceLen, packet->oscore_partialIV, packet->oscore_partialIVLen, nonce);
+    if(packet.oscore_partialIVLen != 0) {
+        ret = oscore_derive_nonce(recipient->recipientId, recipient->recipientIdLen, recipient->sender->commonIV, recipient->sender->nonceLen, partialIV, partialIVLen, nonce);
     }
+    else {
+        ret = oscore_derive_nonce(recipient->sender->senderId, recipient->sender->senderIdLen, recipient->sender->commonIV, recipient->sender->nonceLen, partialIV, partialIVLen, nonce);
+    }
+    
 
     if(ret < 0){
         LOG("Unexpected error");
+        coap_free_header(&packet);
         return -1;
     }
 
@@ -1017,87 +1159,149 @@ int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg, uint8
     int aadLen = 0;
     uint8_t * aad = NULL;
     if(!isResponse) {
-        aadLen = oscore_additional_authenticated_data_get_size(recipient->aeadAlgId, recipient->recipientId, recipient->recipientIdLen, packet->oscore_partialIV, packet->oscore_partialIVLen);
+        aadLen = oscore_additional_authenticated_data_get_size(recipient->sender->aeadAlgId, recipient->recipientId, recipient->recipientIdLen, packet.oscore_partialIV, packet.oscore_partialIVLen);
+    }
+    else {
+        aadLen = oscore_additional_authenticated_data_get_size(recipient->sender->aeadAlgId, recipient->sender->senderId, recipient->sender->senderIdLen, request->partialIV, request->partialIVLen);
     }
 
     if(aadLen <= 0) {
+        coap_free_header(&packet);
         return -1;
     }
     aad = OSCORE_MALLOC(aadLen);
     if(aad == NULL) {
         LOG("Out of memory");
+        coap_free_header(&packet);
         return -1;
     }
 
     if(!isResponse) {
-        aadLen = oscore_additional_authenticated_data_serialize(aad, aadLen, recipient->aeadAlgId, recipient->recipientId, recipient->recipientIdLen, packet->oscore_partialIV, packet->oscore_partialIVLen);
+        aadLen = oscore_additional_authenticated_data_serialize(aad, aadLen, recipient->sender->aeadAlgId, recipient->recipientId, recipient->recipientIdLen, packet.oscore_partialIV, packet.oscore_partialIVLen);
+    }
+    else {
+        aadLen = oscore_additional_authenticated_data_serialize(aad, aadLen, recipient->sender->aeadAlgId, recipient->sender->senderId, recipient->sender->senderIdLen, request->partialIV, request->partialIVLen);
     }
 
     // decrypt
     cose_aead_parameters_t par;
     memset(&par, 0, sizeof(cose_aead_parameters_t));
-    par.plaintext = OSCORE_MALLOC(packet->payload_len - aead->relatingCipherTextLen);
+    par.plaintext = OSCORE_MALLOC(packet.payload_len - aead->relatingCipherTextLen);
     if(par.plaintext == NULL){
         OSCORE_FREE(aad);
+        coap_free_header(&packet);
         LOG("Out of memory");
         return -1;
     }
-    par.plaintextLen = packet->payload_len - aead->relatingCipherTextLen;
-    if(!isResponse) {
-        par.key.key = (uint8_t*)recipient->recipientKey;
-        par.key.keyLen = recipient->recipientKeyLen;
-    }
+    par.plaintextLen = packet.payload_len - aead->relatingCipherTextLen;
+    par.key.key = (uint8_t*)recipient->recipientKey;
+    par.key.keyLen = recipient->recipientKeyLen;
     
     par.nonce = nonce;
     par.nonceLen = aead->nonceMin;
     par.aadEncoded = aad;
     par.aadLen = aadLen;
 
-    cose_error_t cose_ret = aead->decrypt(&par, NULL, packet->payload, packet->payload_len);
-
-    // update replay window
-    if(!isResponse) {
-        oscore_internal_update_replaywindow(recipient, sequenceNumber);
-    }
+    cose_error_t cose_ret = aead->decrypt(&par, NULL, packet.payload, packet.payload_len);
 
     OSCORE_FREE(aad);
     if(cose_ret != COSE_OK){
         OSCORE_FREE(par.plaintext);
+        coap_free_header(&packet);
         return OSCORE_VERIFICATION_FAILED;
+    }
+
+    if(isResponse) {
+        ctx->request = oscore_remove_request(ctx->request, request);
+        OSCORE_FREE(request);
+    }
+    
+
+    // update replay window
+    if(packet.oscore_partialIVLen != 0) {
+        oscore_internal_update_replaywindow(recipient->sender, sequenceNumber);
     }
     
     // update coap msg with decrypted information
-    packet->code = par.plaintext[0];
-    oscore_option_itor_t itor; //oscore_option_itor_init cant be used as it checks complete coap header
+    packet.code = par.plaintext[0];
+    oscore_option_itor_t itor; //oscore_option_itor_init cant be used as it verfies complete coap header
     memset(&itor, 0, sizeof(oscore_option_itor_t));
     itor.nextOption = par.plaintext + 1;
     itor.buffer = par.plaintext + 1;
     itor.length = par.plaintextLen - 1;
 
     while((ret = oscore_option_itor_next(&itor)) == 1) {
-        if(coap_parse_option(packet, itor.option, (uint8_t*)itor.value, itor.valueLength) != NO_ERROR) {
+        if(coap_parse_option(&packet, itor.option, (uint8_t*)itor.value, itor.valueLength) != NO_ERROR) {
             LOG("Could not parse options");
+            coap_free_header(&packet);
             OSCORE_FREE(par.plaintext);
             return -1;
         }
     }
 
     if(ret != 0) {
-        LOG("Invalid format in CoAP Message");
+        LOG("Invalid format in CoAP message");
+        coap_free_header(&packet);
         OSCORE_FREE(par.plaintext);
         return -1;
     }
 
-    packet->buffer = par.plaintext;
     if(itor.nextOption < par.plaintext + par.plaintextLen) {
-        packet->payload = itor.nextOption + 1;
-        packet->payload_len = par.plaintext + par.plaintextLen - packet->payload;
+        packet.payload = itor.nextOption + 1;
+        packet.payload_len = par.plaintext + par.plaintextLen - packet.payload;
     }
     else{
-        packet->payload = NULL;
-        packet->payload_len = 0;
+        packet.payload = NULL;
+        packet.payload_len = 0;
     }
-    
 
-    return newlength;
+    size_t coap_size = coap_serialize_get_size(&packet);
+    msg->buffer = OSCORE_MALLOC(coap_size);
+    if(msg->buffer == NULL){
+        coap_free_header(&packet);
+        LOG("Out of memory");
+        return -1;
+
+    }
+    msg->length = coap_serialize_message(&packet, msg->buffer);
+    OSCORE_FREE(par.plaintext);
+    coap_free_header(&packet);
+
+    return 0;
+}
+
+
+oscore_request_mapping_t * oscore_find_request(oscore_request_mapping_t * begin, uint8_t * token, uint8_t tokenLen) {
+    if(begin == NULL){
+        return NULL;
+    }
+    while(begin != NULL){
+        if(tokenLen == 0 && begin->tokenLen == 0){
+            return begin;
+        }
+        if(begin->tokenLen == tokenLen && memcmp(begin->token, token, tokenLen) == 0){
+            return begin;
+        }
+        
+        begin = begin->next;
+    }
+    return NULL;
+}
+
+oscore_request_mapping_t * oscore_remove_request(oscore_request_mapping_t * begin, oscore_request_mapping_t * del) {
+    if(begin == NULL || del == NULL){
+        return NULL;
+    }
+    if(begin == del) {
+        oscore_request_mapping_t * next = begin->next;
+        return next;
+    }
+    oscore_request_mapping_t * itor = begin;
+    while(itor != NULL && itor->next != del) {
+        itor = itor->next;
+    }
+    if(itor->next == del) {
+        itor->next = del->next;
+    }
+    return begin;
 }

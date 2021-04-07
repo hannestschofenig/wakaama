@@ -1,12 +1,12 @@
 #ifndef OSCORE_H_
 #define OSCORE_H_
 #include <stdint.h>
+#include <time.h>
 #include "cose/cose.h"
 #include "cn-cbor/cn-cbor.h"
 #include "oscore/oscore_config.h"
 
-#define OSCORE_MALLOC(size) lwm2m_malloc(size)
-#define OSCORE_FREE(ptr) lwm2m_free(ptr)
+struct coap_packet_t;
 
 #define OSCORE_PARTIALIV_MAXLEN 5
 #define OSCORE_SENDERSEQUENCENUMBER_MAX (uint64_t)((uint64_t)(1) << 40)
@@ -98,31 +98,60 @@ typedef struct oscore_derived_context {
     size_t nonceLen;
 } oscore_derived_context_t;
 
-typedef struct oscore_recipient_context {
-    struct oscore_recipient_context * next;
+typedef struct oscore_security_context {
+    struct oscore_security_context * next;
     // from common context
-    uint8_t const * recipientId;
-    uint16_t recipientIdLen;
+    uint8_t const * senderId;
+    uint16_t senderIdLen;
     uint8_t const * idContext;
     size_t idContextLen;
     cn_cbor const * aeadAlgId;
 
     // from derived context
-    uint8_t const * recipientKey;
-    size_t recipientKeyLen;
+    uint8_t const * senderKey;
+    size_t senderKeyLen;
     uint8_t const * commonIV;
     size_t nonceLen;
+
+    // sender part
+    uint64_t senderSequenceNumber;
 
     // replay window
     uint64_t highestValidatedSequenceNumber;
     uint32_t replayWindow;
-} oscore_recipient_context_t;
+} oscore_security_context_t;
+
+typedef struct oscore_recipient {
+    struct oscore_recipient * next;
+    oscore_security_context_t * sender;
+
+    uint8_t const * recipientId;
+    uint16_t recipientIdLen;
+    
+    uint8_t const * recipientKey;
+    size_t recipientKeyLen;
+
+} oscore_recipient_t;
+
+typedef struct oscore_request_mapping {
+    struct oscore_request_mapping * next;
+    oscore_recipient_t * recipient;
+    time_t timeout;
+    uint8_t token[8];
+    uint8_t partialIV[8];
+    uint8_t partialIVLen;
+    uint8_t tokenLen;
+} oscore_request_mapping_t;
 
 typedef struct oscore_context {
     cose_context_t cose;
     oscore_hkdf_alg_t * hkdf;
-    oscore_recipient_context_t * recipient;
-    
+    // own context
+    oscore_security_context_t * security;
+    // recipients
+    oscore_recipient_t * recipient;
+    // requests
+    oscore_request_mapping_t * request;
 } oscore_context_t;
 
 void oscore_init(oscore_context_t * ctx);
@@ -156,57 +185,36 @@ int oscore_hkdf_algorithm_rm(oscore_context_t * ctx, cn_cbor * id, oscore_hkdf_a
 int oscore_derive_context(oscore_context_t * ctx, oscore_common_context_t const * commonCtx, oscore_derived_context_t * derivedCtx);
 // nonce must be a buffer with commonIVLen
 int oscore_derive_nonce(uint8_t const * id, size_t idLen, uint8_t const * commonIV, size_t commonIVLen, uint8_t const * partialIV, size_t partialIVLen, uint8_t * nonce);
-// populates recipientctx and adds it to oscore context
-int oscore_add_recipient(oscore_context_t * ctx, oscore_common_context_t const * commonCtx, oscore_derived_context_t const * derivedCtx, oscore_recipient_context_t * recipient);
-// finds a recipient context in the list
-oscore_recipient_context_t * oscore_find_recipient(oscore_recipient_context_t * begin, uint8_t const * id, size_t idLen, uint8_t const * idContext, size_t idContextLen);
+// populates a security ctx and adds it to the list
+int oscore_add_security_ctx(oscore_context_t * ctx, oscore_common_context_t const * commonCtx, oscore_derived_context_t const * derivedCtx, oscore_security_context_t * security);
+// populates recipient ctx and adds it to the list
+int oscore_add_recipient_ctx(oscore_context_t * ctx, oscore_common_context_t const * commonCtx, oscore_derived_context_t const * derivedCtx, oscore_security_context_t * security, oscore_recipient_t * recipient);
 
-typedef struct oscore_sender_context {
-    // from common context
-    uint8_t const * senderId;
-    uint16_t senderIdLen;
-    uint8_t const * idContext;
-    size_t idContextLen;
-    cn_cbor const * aeadAlgId;
+oscore_recipient_t * oscore_find_recipient(oscore_recipient_t * begin, uint8_t const * kid, size_t kidLen, uint8_t const * idContext, size_t idContextLen);
 
-    // from derived context
-    uint8_t const * senderKey;
-    size_t senderKeyLen;
-    uint8_t const * commonIV;
-    size_t nonceLen;
+// find a request // todo rename oscore_request_rm (maybe also add as static)
+oscore_request_mapping_t * oscore_find_request(oscore_request_mapping_t * begin, uint8_t * token, uint8_t tokenLen);
+oscore_request_mapping_t * oscore_remove_request(oscore_request_mapping_t * begin, oscore_request_mapping_t * del);
 
-
-    uint64_t senderSequenceNumber;
-} oscore_sender_context_t;
-
-typedef struct oscore_request_mapping {
-    struct oscore_request_mapping * next;
-    oscore_sender_context_t const * ctx;
-    uint64_t token;
-    uint8_t partialIV[8];
-    uint8_t partialIVLen;
-    uint8_t tokenLen;
-} oscore_request_mapping_t;
 
 typedef struct oscore_message {
-    void * packet; // coap msg
-
-    uint8_t const * id;
-    uint16_t idLen;
-
-    uint8_t partialIV[8];
-    size_t partialIVLen;
+    uint8_t * buffer;
+    size_t length;
     
+    oscore_recipient_t * recipient;
+    
+    uint8_t partialIV[8];
+    uint8_t partialIVLen;
     bool generatePartialIV;
 } oscore_message_t;
 
 // Message
-// keep in mind that payload of msg->packet will be overriden, save it if it must be freed afterwards
-// populate with request id if response
-// prepopulate partialIV with partial IV of request if message is a response
-// set this flag to true if a new partial IV should be generated for response
-// new payload will be allocated with OSCORE_MALLOC!
-int oscore_message_encrypt(oscore_context_t * ctx, oscore_sender_context_t * sender, oscore_message_t * msg);
+
+// keep in mind buffer will be overriden, save it if it must be freed afterwards
+// set generatePartialIV flag to true if a new partial IV should be generated for response
+// otherwise partialIV of msg is used
+// buffer will be allocated with OSCORE_MALLOC!
+int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg);
 
 // checks if a received message is an oscore message
 int oscore_is_oscore_message(uint8_t const * buffer, size_t length);
@@ -215,10 +223,9 @@ int oscore_is_oscore_message(uint8_t const * buffer, size_t length);
 #define OSCORE_VERIFICATION_FAILED -4
 #define OSCORE_REPLAY_DETECTED -5
 // before calling decrypt function, verify message is a oscore message
-// prepoulate packet of msg with a coap_message_t
-// populates id, partialIV of msg
+// populates recipient and partialIV of msg
 // verifies and updates recipient context replay window
-// packet->buffer is allocated with OSCORE_MALLOC
+// msg->buffer is allocated with OSCORE_MALLOC
 // buffer of input must be valid as long as packet must be valid
-int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg, uint8_t * input, size_t length);
+int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg);
 #endif
