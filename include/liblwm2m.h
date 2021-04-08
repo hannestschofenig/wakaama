@@ -65,6 +65,9 @@ extern "C" {
 #include <stddef.h>
 #include <stdbool.h>
 #include <time.h>
+#ifdef LWM2M_SUPPORT_OSCORE
+#include "oscore/oscore.h"
+#endif
 
 #ifdef LWM2M_SERVER_MODE
 #ifndef LWM2M_SUPPORT_JSON
@@ -196,19 +199,20 @@ bool lwm2m_session_is_equal(void * session1, void * session2, void * userData);
 /*
  * Resource IDs for the LWM2M Security Object
  */
-#define LWM2M_SECURITY_URI_ID                 0
-#define LWM2M_SECURITY_BOOTSTRAP_ID           1
-#define LWM2M_SECURITY_SECURITY_ID            2
-#define LWM2M_SECURITY_PUBLIC_KEY_ID          3
-#define LWM2M_SECURITY_SERVER_PUBLIC_KEY_ID   4
-#define LWM2M_SECURITY_SECRET_KEY_ID          5
-#define LWM2M_SECURITY_SMS_SECURITY_ID        6
-#define LWM2M_SECURITY_SMS_KEY_PARAM_ID       7
-#define LWM2M_SECURITY_SMS_SECRET_KEY_ID      8
-#define LWM2M_SECURITY_SMS_SERVER_NUMBER_ID   9
-#define LWM2M_SECURITY_SHORT_SERVER_ID        10
-#define LWM2M_SECURITY_HOLD_OFF_ID            11
-#define LWM2M_SECURITY_BOOTSTRAP_TIMEOUT_ID   12
+#define LWM2M_SECURITY_URI_ID                     0
+#define LWM2M_SECURITY_BOOTSTRAP_ID               1
+#define LWM2M_SECURITY_SECURITY_ID                2
+#define LWM2M_SECURITY_PUBLIC_KEY_ID              3
+#define LWM2M_SECURITY_SERVER_PUBLIC_KEY_ID       4
+#define LWM2M_SECURITY_SECRET_KEY_ID              5
+#define LWM2M_SECURITY_SMS_SECURITY_ID            6
+#define LWM2M_SECURITY_SMS_KEY_PARAM_ID           7
+#define LWM2M_SECURITY_SMS_SECRET_KEY_ID          8
+#define LWM2M_SECURITY_SMS_SERVER_NUMBER_ID       9
+#define LWM2M_SECURITY_SHORT_SERVER_ID           10
+#define LWM2M_SECURITY_HOLD_OFF_ID               11
+#define LWM2M_SECURITY_BOOTSTRAP_TIMEOUT_ID      12
+#define LWM2M_SECURITY_OSCORE_SECURITY_MODE_ID   17
 
 /*
  * Resource IDs for the LWM2M Server Object
@@ -243,6 +247,16 @@ bool lwm2m_session_is_equal(void * session1, void * session2, void * userData);
 #define LWM2M_SECURITY_MODE_CERTIFICATE     2
 #define LWM2M_SECURITY_MODE_NONE            3
 
+/*
+ * Resource IDs for the LWM2M OSCORE Object
+ */
+#define LWM2M_OSCORE_MASTER_SECRET_ID 0
+#define LWM2M_OSCORE_SENDER_ID_ID 1
+#define LWM2M_OSCORE_RECIPIENT_ID_ID 2
+#define LWM2M_OSCORE_AEAD_ALGORITHM_ID 3
+#define LWM2M_OSCORE_HMAC_ALGORITHM_ID 4
+#define LWM2M_OSCORE_MASTER_SALT_ID 5
+#define LWM2M_OSCORE_ID_CONTEXT_ID 6
 
 /*
  * Utility functions for sorted linked list
@@ -573,6 +587,9 @@ typedef struct _lwm2m_server_
     uint8_t                 attempt;      // Current registration attempt
     uint8_t                 sequence;     // Current registration sequence
 #endif
+#ifdef LWM2M_SUPPORT_OSCORE
+    oscore_recipient_t * recipient;
+#endif
 } lwm2m_server_t;
 
 typedef struct _lwm2m_context_ lwm2m_context_t;
@@ -668,6 +685,9 @@ typedef struct _lwm2m_client_
     lwm2m_observation_t *   observationList;
     uint16_t                observationId;
     lwm2m_block_data_t *    blockData;   // list to handle temporary block data.
+#ifdef LWM2M_SUPPORT_OSCORE
+    oscore_recipient_t * recipient;
+#endif
 } lwm2m_client_t;
 
 
@@ -786,6 +806,9 @@ struct _lwm2m_context_
     uint16_t                nextMID;
     lwm2m_transaction_t *   transactionList;
     void *                  userData;
+#ifdef LWM2M_SUPPORT_OSCORE
+    oscore_context_t oscore;
+#endif
 };
 
 

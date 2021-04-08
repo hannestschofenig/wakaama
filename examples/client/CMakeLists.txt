@@ -22,6 +22,11 @@ endif()
 
 add_definitions(${SHARED_DEFINITIONS} ${WAKAAMA_DEFINITIONS})
 
+add_definitions(-DLWM2M_SUPPORT_OSCORE)
+add_definitions(-DOSCORE_BACKEND)
+add_definitions(-DCOSE_BACKEND)
+add_definitions(-DUSE_CBOR_CONTEXT)
+
 include_directories (${WAKAAMA_HEADERS_DIR} ${COAP_HEADERS_DIR} ${DATA_HEADERS_DIR} ${WAKAAMA_SOURCES_DIR} ${SHARED_INCLUDE_DIRS})
 
 SET(SOURCES
@@ -29,6 +34,7 @@ SET(SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/lwm2mclient.h
     ${CMAKE_CURRENT_LIST_DIR}/system_api.c
     ${CMAKE_CURRENT_LIST_DIR}/object_security.c
+    ${CMAKE_CURRENT_LIST_DIR}/object_oscore.c
     ${CMAKE_CURRENT_LIST_DIR}/object_server.c
     ${CMAKE_CURRENT_LIST_DIR}/object_device.c
     ${CMAKE_CURRENT_LIST_DIR}/object_firmware.c
@@ -39,9 +45,11 @@ SET(SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/object_test.c
     )
 
-add_executable(${PROJECT_NAME} ${SOURCES} ${WAKAAMA_SOURCES} ${COAP_SOURCES} ${DATA_SOURCES} ${SHARED_SOURCES})
+add_executable(${PROJECT_NAME} ${SOURCES} ${WAKAAMA_SOURCES} ${COAP_SOURCES} ${DATA_SOURCES} ${SHARED_SOURCES} ${OSCORE_SOURCES})
 
 # Add WITH_LOGS to debug variant
 set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY COMPILE_DEFINITIONS $<$<CONFIG:Debug>:WITH_LOGS>)
 
 SOURCE_GROUP(wakaama FILES ${WAKAAMA_SOURCES})
+
+target_link_libraries(${PROJECT_NAME} cn-cbor::cn-cbor mbedtls)

@@ -309,7 +309,7 @@ bool transaction_handleResponse(lwm2m_context_t * contextP,
                     if (COAP_TYPE_CON == message->type && NULL != response)
                     {
                         coap_init_message(response, COAP_TYPE_ACK, 0, message->mid);
-                        message_send(contextP, response, fromSessionH);
+                        message_send(contextP, response, fromSessionH, true);
                     }
 
                     if ((COAP_401_UNAUTHORIZED == message->code) && (COAP_MAX_RETRANSMIT > transacP->retrans_counter))
@@ -407,7 +407,7 @@ int transaction_send(lwm2m_context_t * contextP,
 
         if (COAP_MAX_RETRANSMIT + 1 >= transacP->retrans_counter)
         {
-            (void)lwm2m_buffer_send(transacP->peerH, transacP->buffer, transacP->buffer_len, contextP->userData);
+            (void)lwm2m_send_message(contextP, transacP->buffer, transacP->buffer_len, transacP->peerH, true);
 
             transacP->retrans_time += timeout;
             transacP->retrans_counter += 1;

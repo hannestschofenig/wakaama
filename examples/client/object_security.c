@@ -70,6 +70,9 @@ typedef struct _security_instance_
     uint16_t                     shortID;
     uint32_t                     clientHoldOffTime;
     uint32_t                     bootstrapServerAccountTimeout;
+#ifdef LWM2M_SUPPORT_OSCORE
+    uint16_t                     oscoreInstance;
+#endif
 } security_instance_t;
 
 static uint8_t prv_get_value(lwm2m_data_t * dataP,
@@ -128,7 +131,14 @@ static uint8_t prv_get_value(lwm2m_data_t * dataP,
     case LWM2M_SECURITY_BOOTSTRAP_TIMEOUT_ID:
         lwm2m_data_encode_int(targetP->bootstrapServerAccountTimeout, dataP);
         return COAP_205_CONTENT;
-
+#ifdef LWM2M_SUPPORT_OSCORE
+    case LWM2M_SECURITY_OSCORE_SECURITY_MODE_ID:
+        if(targetP->oscoreInstance == LWM2M_MAX_ID) {
+            return COAP_404_NOT_FOUND;
+        }
+        lwm2m_data_encode_objlink(LWM2M_OSCORE_OBJECT_ID, targetP->oscoreInstance, dataP);
+        return COAP_205_CONTENT;
+#endif
     default:
         return COAP_404_NOT_FOUND;
     }
@@ -161,7 +171,11 @@ static uint8_t prv_security_read(uint16_t instanceId,
                               LWM2M_SECURITY_SMS_SERVER_NUMBER_ID,
                               LWM2M_SECURITY_SHORT_SERVER_ID,
                               LWM2M_SECURITY_HOLD_OFF_ID,
-                              LWM2M_SECURITY_BOOTSTRAP_TIMEOUT_ID};
+                              LWM2M_SECURITY_BOOTSTRAP_TIMEOUT_ID,
+#ifdef LWM2M_SUPPORT_OSCORE
+                              LWM2M_SECURITY_OSCORE_SECURITY_MODE_ID
+#endif
+                             };
         int nbRes = sizeof(resList)/sizeof(uint16_t);
 
         *dataArrayP = lwm2m_data_new(nbRes);
@@ -446,6 +460,9 @@ static uint8_t prv_security_create(uint16_t instanceId,
     memset(targetP, 0, sizeof(security_instance_t));
 
     targetP->instanceId = instanceId;
+#ifdef LWM2M_SUPPORT_OSCORE
+    targetP->oscoreInstance = LWM2M_MAX_ID;
+#endif
     objectP->instanceList = LWM2M_LIST_ADD(objectP->instanceList, targetP);
 
     result = prv_security_write(instanceId, numData, dataArray, objectP, LWM2M_WRITE_REPLACE_RESOURCES);
@@ -568,6 +585,9 @@ lwm2m_object_t * get_security_object(int serverId,
         targetP->publicIdLen = 0;
         targetP->secretKey = NULL;
         targetP->secretKeyLen = 0;
+#ifdef LWM2M_SUPPORT_OSCORE // todo change to LWM2M_ID_MAX
+        targetP->oscoreInstance = 0;
+#endif
         if (bsPskId != NULL || psk != NULL)
         {
             targetP->securityMode = LWM2M_SECURITY_MODE_PRE_SHARED_KEY;

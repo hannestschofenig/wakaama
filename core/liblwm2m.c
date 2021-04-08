@@ -70,6 +70,9 @@ lwm2m_context_t * lwm2m_init(void * userData)
         contextP->userData = userData;
         srand((int)lwm2m_gettime());
         contextP->nextMID = rand();
+#ifdef LWM2M_SUPPORT_OSCORE
+        oscore_init(&contextP->oscore);
+#endif
     }
 
     return contextP;
@@ -484,7 +487,9 @@ next_step:
 
     observe_step(contextP, tv_sec, timeoutP);
 #endif
-
+#ifdef LWM2M_SUPPORT_OSCORE
+    oscore_step(&contextP->oscore, timeoutP);
+#endif
     registration_step(contextP, tv_sec, timeoutP);
     transaction_step(contextP, tv_sec, timeoutP);
 

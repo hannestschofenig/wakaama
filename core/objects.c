@@ -888,6 +888,7 @@ int object_getRegisterPayload(lwm2m_context_t * contextP,
         size_t length;
 
         if (objectP->objID == LWM2M_SECURITY_OBJECT_ID) continue;
+        if (objectP->objID == LWM2M_OSCORE_OBJECT_ID) continue;
 
         start = index;
         result = prv_getObjectTemplate(buffer + index, bufferLen - index, objectP->objID);
@@ -978,6 +979,10 @@ int object_getServers(lwm2m_context_t * contextP, bool checkOnly)
     lwm2m_object_t * objectP;
     lwm2m_object_t * securityObjP = NULL;
     lwm2m_object_t * serverObjP = NULL;
+#ifdef LWM2M_SUPPORT_OSCORE
+    lwm2m_object_t * oscoreObjP = NULL;
+    lwm2m_list_t * oscoreInstP = NULL;
+#endif
     lwm2m_list_t * securityInstP;   // instanceID of the server in the LWM2M Security Object
 
     LOG("Entering");
@@ -992,6 +997,11 @@ int object_getServers(lwm2m_context_t * contextP, bool checkOnly)
         {
             serverObjP = objectP;
         }
+#ifdef LWM2M_SUPPORT_OSCORE
+        else if(objectP->objID == LWM2M_OSCORE_OBJECT_ID) {
+            oscoreObjP = objectP;
+        }
+#endif
     }
 
     if (NULL == securityObjP) return -1;
@@ -1035,6 +1045,51 @@ int object_getServers(lwm2m_context_t * contextP, bool checkOnly)
                 lwm2m_data_free(size, dataP);
                 return -1;
             }
+#ifdef LWM2M_SUPPORT_OSCORE
+            if(oscoreObjP != NULL) {
+                lwm2m_data_free(size, dataP);
+                size = 1;
+                dataP = lwm2m_data_new(size);
+                if(dataP == NULL){
+                    lwm2m_free(targetP);
+                    return -1;
+                }
+                dataP[0].id = LWM2M_SECURITY_OSCORE_SECURITY_MODE_ID;
+                if (securityObjP->readFunc(securityInstP->id, &size, &dataP, securityObjP) == COAP_205_CONTENT)
+                {
+                    oscoreInstP = LWM2M_LIST_FIND(oscoreObjP->instanceList, dataP[0].value.asObjLink.objectInstanceId);
+                    if(oscoreInstP == NULL) {
+                        lwm2m_data_free(size, dataP);
+                        lwm2m_free(targetP);
+                        return -1;
+                    }
+                    lwm2m_data_free(size, dataP);
+                    size = 2;
+                    dataP = lwm2m_data_new(size);
+                    if(dataP == NULL) {
+                        lwm2m_free(targetP);
+                        return -1;
+                    }
+                    dataP[0].id = LWM2M_OSCORE_RECIPIENT_ID_ID;
+                    dataP[1].id = LWM2M_OSCORE_ID_CONTEXT_ID;
+                    if(oscoreObjP->readFunc(oscoreInstP->id, &size, &dataP, oscoreObjP) == COAP_205_CONTENT) {
+                        targetP->recipient = oscore_find_recipient(contextP->oscore.recipient, dataP[0].value.asBuffer.buffer, dataP[0].value.asBuffer.length, dataP[1].value.asBuffer.buffer, dataP[1].value.asBuffer.length);
+                        if(targetP->recipient == NULL){
+                            lwm2m_data_free(size, dataP);
+                            lwm2m_free(targetP);
+                            return -1;
+                        }
+                    }
+                    else{
+                        lwm2m_data_free(size, dataP);
+                        lwm2m_free(targetP);
+                        return -1;
+                    }
+                    
+                }
+            }
+            
+#endif
 
             if (isBootstrap)
             {

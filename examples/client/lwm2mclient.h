@@ -29,6 +29,10 @@
 
 #include "liblwm2m.h"
 
+#ifdef LWM2M_SUPPORT_OSCORE
+    #include "oscore/oscore.h"
+#endif
+
 extern int g_reboot;
 
 /*
@@ -107,5 +111,15 @@ void clean_security_object(lwm2m_object_t * objectP);
 char * get_server_uri(lwm2m_object_t * objectP, uint16_t secObjInstID);
 void display_security_object(lwm2m_object_t * objectP);
 void copy_security_object(lwm2m_object_t * objectDest, lwm2m_object_t * objectSrc);
+
+/*
+ * object_oscore.c
+ */
+
+#ifdef LWM2M_SUPPORT_OSCORE
+lwm2m_object_t * get_oscore_object();
+int oscore_object_add_instance(lwm2m_object_t * objectP, lwm2m_context_t * ctx, oscore_common_context_t * common);
+
+#endif
 
 #endif /* LWM2MCLIENT_H_ */

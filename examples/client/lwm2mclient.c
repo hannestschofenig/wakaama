@@ -86,8 +86,11 @@
 
 int g_reboot = 0;
 static int g_quit = 0;
-
+#ifdef LWM2M_SUPPORT_OSCORE
+#define OBJ_COUNT 10
+#else
 #define OBJ_COUNT 9
+#endif
 lwm2m_object_t * objArray[OBJ_COUNT];
 
 // only backup security and server objects
@@ -1123,6 +1126,49 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Failed to create Access Control ACL resource for serverId: 999\r\n");
         return -1;
     }
+
+#ifdef LWM2M_SUPPORT_OSCORE
+    uint8_t const masterSecret[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10 
+    };
+    uint8_t const masterSalt[] = {
+        0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40 
+    };
+    oscore_common_context_t oscore_common_ctx;
+    memset(&oscore_common_ctx, 0, sizeof(oscore_common_context_t));
+    objArray[9] = get_oscore_object();
+    if(NULL == objArray[9]){
+        fprintf(stderr, "Failed to create OSCORE object\r\n");
+        return -1;
+    }
+    oscore_common_ctx.masterSecret = (uint8_t*) lwm2m_malloc(sizeof(masterSecret));
+    if(oscore_common_ctx.masterSecret == NULL) {
+        fprintf(stderr, "Failed to create OSCORE security\r\n");
+        return -1;
+    }
+    memcpy(oscore_common_ctx.masterSecret, masterSecret, sizeof(masterSecret));
+    oscore_common_ctx.masterSecretLen = sizeof(masterSecret);
+    //oscore_common_ctx.masterSalt = (uint8_t*) lwm2m_malloc(sizeof(masterSalt));
+    //if(oscore_common_ctx.masterSalt == NULL) {
+    //    fprintf(stderr, "Failed to create OSCORE security\r\n");
+    //    return -1;
+    //}
+    //memcpy(oscore_common_ctx.masterSalt, masterSalt, sizeof(masterSalt));
+    //oscore_common_ctx.masterSaltLen = sizeof(masterSalt);
+
+    oscore_common_ctx.senderId[0] = 0x00;
+    oscore_common_ctx.senderIdLen = 1;
+    oscore_common_ctx.recipientId[0] = 0x01;
+    oscore_common_ctx.recipientIdLen = 1;
+
+    oscore_common_ctx.hkdfAlgId.type = CN_CBOR_INT;
+    oscore_common_ctx.hkdfAlgId.v.sint = COSE_ALGO_HKDF_SHA_256;
+
+    oscore_common_ctx.aeadAlgId.type = CN_CBOR_UINT;
+    oscore_common_ctx.aeadAlgId.v.sint = COSE_ALGO_AES_CCM_16_64_128;
+#endif
+
     /*
      * The liblwm2m library is now initialized with the functions that will be in
      * charge of communication
@@ -1137,6 +1183,12 @@ int main(int argc, char *argv[])
 #ifdef WITH_TINYDTLS
     data.lwm2mH = lwm2mH;
 #endif
+#ifdef LWM2M_SUPPORT_OSCORE
+    if(oscore_object_add_instance(objArray[9], lwm2mH, &oscore_common_ctx) != 0){
+        fprintf(stderr, "Failed to create OSCORE instance\r\n");
+        return -1;
+    }
+#endif  
 
     /*
      * We configure the liblwm2m library with the name of the client - which shall be unique for each client -
@@ -1357,28 +1409,28 @@ int main(int argc, char *argv[])
             /*
              * If the event happened on the SDTIN
              */
-            else if (FD_ISSET(STDIN_FILENO, &readfds))
-            {
-                numBytes = read(STDIN_FILENO, buffer, MAX_PACKET_SIZE - 1);
+            // else if (FD_ISSET(STDIN_FILENO, &readfds))
+            // {
+                // numBytes = read(STDIN_FILENO, buffer, MAX_PACKET_SIZE - 1);
 
-                if (numBytes > 1)
-                {
-                    buffer[numBytes] = 0;
-                    /*
-                     * We call the corresponding callback of the typed command passing it the buffer for further arguments
-                     */
-                    handle_command(commands, (char*)buffer);
-                }
-                if (g_quit == 0)
-                {
-                    fprintf(stdout, "\r\n> ");
-                    fflush(stdout);
-                }
-                else
-                {
-                    fprintf(stdout, "\r\n");
-                }
-            }
+                // if (numBytes > 1)
+                // {
+                    // buffer[numBytes] = 0;
+                    // /*
+                    //  * We call the corresponding callback of the typed command passing it the buffer for further arguments
+                    //  */
+                    // handle_command(commands, (char*)buffer);
+                // }
+                // if (g_quit == 0)
+                // {
+                    // fprintf(stdout, "\r\n> ");
+                    // fflush(stdout);
+                // }
+                // else
+                // {
+                    // fprintf(stdout, "\r\n");
+                // }
+            // }
         }
     }
 

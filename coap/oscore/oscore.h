@@ -6,8 +6,6 @@
 #include "cn-cbor/cn-cbor.h"
 #include "oscore/oscore_config.h"
 
-struct coap_packet_t;
-
 #define OSCORE_PARTIALIV_MAXLEN 5
 #define OSCORE_SENDERSEQUENCENUMBER_MAX (uint64_t)((uint64_t)(1) << 40)
 #define OSCORE_OPTION_VALUE_MAXLEN 255
@@ -71,11 +69,11 @@ typedef struct oscore_hkdf_alg {
 typedef struct oscore_common_context {
     // use uint16_t for length to prevent failure
     // common context
-    uint8_t const * masterSecret;
+    uint8_t * masterSecret;
     uint16_t masterSecretLen;
-    uint8_t const * masterSalt;
+    uint8_t * masterSalt;
     uint16_t masterSaltLen;
-    uint8_t const * idContext;
+    uint8_t idContext[OSCORE_ID_CONTEXT_MAXLEN];
     uint16_t idContextLen;
     cn_cbor hkdfAlgId;
     cn_cbor aeadAlgId;
@@ -150,12 +148,16 @@ typedef struct oscore_context {
     oscore_security_context_t * security;
     // recipients
     oscore_recipient_t * recipient;
-    // requests
-    oscore_request_mapping_t * request;
+    // sent requests
+    oscore_request_mapping_t * sentRequest;
+    // received requests
+    oscore_request_mapping_t * receivedRequest;
 } oscore_context_t;
 
 void oscore_init(oscore_context_t * ctx);
 void oscore_free(oscore_context_t * ctx);
+
+void oscore_step(oscore_context_t * ctx, time_t * timeoutP);
 
 #ifdef OSCORE_BACKEND
 void oscore_backend_init(oscore_context_t * ctx);
@@ -192,8 +194,9 @@ int oscore_add_recipient_ctx(oscore_context_t * ctx, oscore_common_context_t con
 
 oscore_recipient_t * oscore_find_recipient(oscore_recipient_t * begin, uint8_t const * kid, size_t kidLen, uint8_t const * idContext, size_t idContextLen);
 
-// find a request // todo rename oscore_request_rm (maybe also add as static)
-oscore_request_mapping_t * oscore_find_request(oscore_request_mapping_t * begin, uint8_t * token, uint8_t tokenLen);
+// find a request // (todo maybe add as static functions)
+oscore_request_mapping_t * oscore_find_request(oscore_request_mapping_t * begin, uint8_t * token, uint8_t tokenLen, oscore_recipient_t const *recipient);
+// returns (new) beginning of list
 oscore_request_mapping_t * oscore_remove_request(oscore_request_mapping_t * begin, oscore_request_mapping_t * del);
 
 
@@ -203,17 +206,19 @@ typedef struct oscore_message {
     
     oscore_recipient_t * recipient;
     
-    uint8_t partialIV[8];
-    uint8_t partialIVLen;
     bool generatePartialIV;
 } oscore_message_t;
 
 // Message
 
+//Note: using coap_packet_t as input to encrypt and output to decrypt could lead to some memory management issues in case of decrypting
+//      options and payload would be loaded from different buffers which would increase complexity for memory management
+//      decided to use a serialized interface for both functions
+
 // keep in mind buffer will be overriden, save it if it must be freed afterwards
 // set generatePartialIV flag to true if a new partial IV should be generated for response
 // otherwise partialIV of msg is used
-// buffer will be allocated with OSCORE_MALLOC!
+// buffer will be allocated with OSCORE_MALLOC
 int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg);
 
 // checks if a received message is an oscore message
@@ -223,9 +228,9 @@ int oscore_is_oscore_message(uint8_t const * buffer, size_t length);
 #define OSCORE_VERIFICATION_FAILED -4
 #define OSCORE_REPLAY_DETECTED -5
 // before calling decrypt function, verify message is a oscore message
-// populates recipient and partialIV of msg
+// populates recipient and partialIV of msg if request
 // verifies and updates recipient context replay window
 // msg->buffer is allocated with OSCORE_MALLOC
-// buffer of input must be valid as long as packet must be valid
+// todo if recipient is set in msg only this recipient to decrypt
 int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg);
 #endif

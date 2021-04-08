@@ -807,7 +807,7 @@ void observe_step(lwm2m_context_t * contextP,
                     message->mid = watcherP->lastMid;
                     coap_set_header_token(message, watcherP->token, watcherP->tokenLen);
                     coap_set_header_observe(message, watcherP->counter++);
-                    (void)message_send(contextP, message, watcherP->server->sessionH);
+                    (void)message_send(contextP, message, watcherP->server->sessionH, true);
                     watcherP->update = false;
                 }
 
@@ -1364,13 +1364,13 @@ bool observe_handleNotify(lwm2m_context_t * contextP,
     if (observationP == NULL)
     {
         coap_init_message(response, COAP_TYPE_RST, 0, message->mid);
-        message_send(contextP, response, fromSessionH);
+        message_send(contextP, response, fromSessionH, true);
     }
     else
     {
         if (message->type == COAP_TYPE_CON ) {
             coap_init_message(response, COAP_TYPE_ACK, 0, message->mid);
-            message_send(contextP, response, fromSessionH);
+            message_send(contextP, response, fromSessionH, true);
         }
 
         /*

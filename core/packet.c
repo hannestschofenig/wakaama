@@ -443,9 +443,70 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
     uint8_t coap_error_code = NO_ERROR;
     static coap_packet_t message[1];
     static coap_packet_t response[1];
-
     LOG("Entering");
-    coap_error_code = coap_parse_message(message, buffer, (uint16_t)length);
+#ifdef LWM2M_CLIENT_MODE
+    lwm2m_server_t * peerP;
+#else
+    lwm2m_client_t * peerP;
+#endif
+
+#ifdef LWM2M_SUPPORT_OSCORE
+#ifdef LWM2M_CLIENT_MODE
+    oscore_recipient_t * recipient = NULL;
+    peerP = utils_findServer(contextP, fromSessionH);
+#ifdef LWM2M_BOOTSTRAP
+    if (peerP == NULL)
+    {
+        peerP = utils_findBootstrapServer(contextP, fromSessionH);
+    }
+#endif
+    if(peerP == NULL) { // ignore message of unknown server
+        coap_error_code = COAP_IGNORE;
+    }
+    else {
+        recipient = peerP->recipient;
+    }
+#else
+    // todo add return code to lwm2m_result_callback_t to delete client if verifcation of endpointname fails
+    peerP = utils_findClient(contextP, fromSessionH);
+#endif
+    if(coap_error_code == NO_ERROR) {
+        int is_oscore = oscore_is_oscore_message(buffer, length);
+        if(is_oscore == 1) {
+            oscore_message_t oscore_msg;
+            memset(&oscore_msg, 0, sizeof(oscore_message_t));
+            oscore_msg.buffer = buffer;
+            oscore_msg.length = length;
+            oscore_msg.recipient = recipient;
+
+            int oscore_ret = oscore_message_decrypt(&contextP->oscore, &oscore_msg);
+            if(oscore_ret == 0) {
+                recipient = oscore_msg.recipient; // we will add recipient to client structure
+            }
+            else if(oscore_ret == OSCORE_REPLAY_DETECTED || oscore_ret == OSCORE_COULD_NOT_FIND_RECIPIENT) {
+                coap_error_code = COAP_401_UNAUTHORIZED;
+            }
+            else if(oscore_ret == OSCORE_VERIFICATION_FAILED) {
+                coap_error_code = COAP_400_BAD_REQUEST;
+            }
+            else { 
+                coap_error_code = COAP_500_INTERNAL_SERVER_ERROR;
+            }
+            
+        }
+        else if(is_oscore == 0 && recipient != NULL) { // other endpoint should use OSCORE to encrypt messages
+            coap_error_code = UNAUTHORIZED_4_01;
+        }
+    }
+    
+    
+#endif
+
+    if(coap_error_code == NO_ERROR){
+        coap_error_code = coap_parse_message(message, buffer, (uint16_t)length);
+    }
+    
+    
     if (coap_error_code == NO_ERROR)
     {
         LOG_ARG("Parsed: ver %u, type %u, tkl %u, code %u.%.2u, mid %u, Content type: %d",
@@ -492,7 +553,6 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
             {
 #ifdef LWM2M_CLIENT_MODE
                 // get server
-                lwm2m_server_t * peerP;
                 peerP = utils_findServer(contextP, fromSessionH);
 #ifdef LWM2M_BOOTSTRAP
                 if (peerP == NULL)
@@ -501,7 +561,6 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
                 }
 #endif
 #else
-                lwm2m_client_t * peerP;
                 multi_option_t * uriPath = message->uri_path;
                 bool isRegistration = NULL != uriPath && URI_REGISTRATION_SEGMENT_LEN == uriPath->len && 0 == strncmp(URI_REGISTRATION_SEGMENT, (char *)uriPath->data, uriPath->len);
                 peerP = utils_findClient(contextP, fromSessionH);
@@ -516,6 +575,9 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
                         peerP->endOfLife = lwm2m_gettime() + LWM2M_DEFAULT_LIFETIME;
                         peerP->sessionH = fromSessionH;
                         peerP->internalID = lwm2m_list_newId((lwm2m_list_t *)contextP->clientList);
+#ifdef LWM2M_SUPPORT_OSCORE
+                        peerP->recipient = recipient;
+#endif
                         contextP->clientList = (lwm2m_client_t *)LWM2M_LIST_ADD(contextP->clientList, peerP);
                     }
                 }
@@ -566,6 +628,30 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
             if (coap_error_code == NO_ERROR)
 #endif
             {
+#ifdef LWM2M_SUPPORT_OSCORE
+#ifdef LWM2M_SERVER_MODE
+                // create client if not already happened to add oscore context for possible verifaction of endpointname
+                bool isRegistration = NULL != uriPath && URI_REGISTRATION_SEGMENT_LEN == uriPath->len && 0 == strncmp(URI_REGISTRATION_SEGMENT, (char *)uriPath->data, uriPath->len);
+                peerP = utils_findClient(contextP, fromSessionH);
+                if (peerP == NULL && isRegistration)
+                {
+                    peerP = (lwm2m_client_t *)lwm2m_malloc(sizeof(lwm2m_client_t));
+
+                    if (peerP != NULL)
+                    {
+                        memset(peerP, 0, sizeof(lwm2m_client_t));
+                        peerP->lifetime = LWM2M_DEFAULT_LIFETIME;
+                        peerP->endOfLife = lwm2m_gettime() + LWM2M_DEFAULT_LIFETIME;
+                        peerP->sessionH = fromSessionH;
+                        peerP->internalID = lwm2m_list_newId((lwm2m_list_t *)contextP->clientList);
+                        peerP->recipient = recipient;
+                        contextP->clientList = (lwm2m_client_t *)LWM2M_LIST_ADD(contextP->clientList, peerP);
+                    }
+                }
+#endif
+#endif
+                
+
                 coap_error_code = handle_request(contextP, fromSessionH, message, response);
             }
             if (coap_error_code == NO_ERROR)
@@ -598,8 +684,7 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
                     coap_set_header_block2(response, 0, response->payload_len > REST_MAX_CHUNK_SIZE, REST_MAX_CHUNK_SIZE);
                     coap_set_payload(response, response->payload, REST_MAX_CHUNK_SIZE);
                 }
-
-                coap_error_code = message_send(contextP, response, fromSessionH);
+                coap_error_code = message_send(contextP, response, fromSessionH, true);
 
                 lwm2m_free(payload);
                 response->payload = NULL;
@@ -609,7 +694,7 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
             {
                 if (1 == coap_set_status_code(response, coap_error_code))
                 {
-                    coap_error_code = message_send(contextP, response, fromSessionH);
+                    coap_error_code = message_send(contextP, response, fromSessionH, true);
                 }
             }
         }
@@ -624,7 +709,6 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
                 {
 #ifdef LWM2M_CLIENT_MODE
                     // get server
-                    lwm2m_server_t * peerP;
                     peerP = utils_findServer(contextP, fromSessionH);
 #ifdef LWM2M_BOOTSTRAP
                     if (peerP == NULL)
@@ -633,7 +717,6 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
                     }
 #endif
 #else
-                    lwm2m_client_t * peerP;
                     peerP = utils_findClient(contextP, fromSessionH);
 #endif
 
@@ -667,7 +750,7 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
                         {
                             coap_set_status_code(response, COAP_413_ENTITY_TOO_LARGE);
                         }
-                        coap_error_code = message_send(contextP, response, fromSessionH);
+                        coap_error_code = message_send(contextP, response, fromSessionH, true);
                     }
                 }
                 break;
@@ -683,7 +766,6 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
                 {
 #ifdef LWM2M_CLIENT_MODE
                     // get server
-                    lwm2m_server_t * peerP;
                     peerP = utils_findServer(contextP, fromSessionH);
 #ifdef LWM2M_BOOTSTRAP
                     if (peerP == NULL)
@@ -736,7 +818,6 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
                 {
 #ifdef LWM2M_CLIENT_MODE
                     // get server
-                    lwm2m_server_t * peerP;
                     peerP = utils_findServer(contextP, fromSessionH);
 #ifdef LWM2M_BOOTSTRAP
                     if (peerP == NULL)
@@ -745,7 +826,6 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
                     }
 #endif
 #else
-                    lwm2m_client_t * peerP;
                     peerP = utils_findClient(contextP, fromSessionH);
 #endif
 
@@ -821,21 +901,22 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
         /* Reuse input buffer for error message. */
         coap_init_message(message, COAP_TYPE_ACK, coap_error_code, message->mid);
         coap_set_payload(message, coap_error_message, strlen(coap_error_message));
-        message_send(contextP, message, fromSessionH);
+        message_send(contextP, message, fromSessionH, false);
     }
 }
 
 
 uint8_t message_send(lwm2m_context_t * contextP,
                      coap_packet_t * message,
-                     void * sessionH)
+                     void * sessionH,
+                     bool encrypted)
 {
     uint8_t result = COAP_500_INTERNAL_SERVER_ERROR;
     uint8_t * pktBuffer;
     size_t pktBufferLen = 0;
     size_t allocLen;
-
     LOG("Entering");
+    
     allocLen = coap_serialize_get_size(message);
     LOG_ARG("Size to allocate: %d", allocLen);
     if (allocLen == 0) return COAP_500_INTERNAL_SERVER_ERROR;
@@ -845,13 +926,55 @@ uint8_t message_send(lwm2m_context_t * contextP,
     {
         pktBufferLen = coap_serialize_message(message, pktBuffer);
         LOG_ARG("coap_serialize_message() returned %d", pktBufferLen);
-        if (0 != pktBufferLen)
-        {
-            result = lwm2m_buffer_send(sessionH, pktBuffer, pktBufferLen, contextP->userData);
-        }
-        lwm2m_free(pktBuffer);
+        
     }
 
+    if (0 != pktBufferLen)
+    {
+        result = lwm2m_send_message(contextP, pktBuffer, pktBufferLen, sessionH, encrypted);
+    }
+    lwm2m_free(pktBuffer);
     return result;
 }
 
+uint8_t lwm2m_send_message(lwm2m_context_t * contextP, uint8_t const * buffer, size_t length, void * sessionH, bool encrypted) {
+#ifdef LWM2M_SUPPORT_OSCORE
+#ifdef LWM2M_CLIENT_MODE
+    lwm2m_server_t * peerP;
+    peerP = utils_findServer(contextP, sessionH);
+#ifdef LWM2M_BOOTSTRAP
+    if (peerP == NULL)
+    {
+        peerP = utils_findBootstrapServer(contextP, sessionH);
+    }
+#endif
+#else
+
+    lwm2m_client_t * peerP;
+    peerP = utils_findClient(contextP, sessionH);
+#endif
+    if(encrypted && peerP->recipient != NULL) { // use oscore for encryption
+        uint8_t * pktBuffer = (uint8_t *)lwm2m_malloc(length);
+        if(pktBuffer == NULL) {
+            return COAP_500_INTERNAL_SERVER_ERROR;
+        }
+        memcpy(pktBuffer,buffer,length);
+        oscore_message_t oscore_msg;
+        memset(&oscore_msg, 0, sizeof(oscore_message_t));
+        oscore_msg.recipient = peerP->recipient;
+        oscore_msg.buffer = pktBuffer;
+        oscore_msg.length = length;
+        if(oscore_message_encrypt(&contextP->oscore, &oscore_msg) != 0) {
+            lwm2m_free(pktBuffer);
+            return COAP_500_INTERNAL_SERVER_ERROR;
+        }
+        lwm2m_free(pktBuffer);
+        uint8_t ret = lwm2m_buffer_send(sessionH, oscore_msg.buffer, oscore_msg.length, contextP->userData);
+        lwm2m_free(oscore_msg.buffer);
+        return ret;
+    }
+#else
+    (void)encrypted;
+#endif
+    return lwm2m_buffer_send(sessionH, (uint8_t*)buffer, length, contextP->userData);
+}
