@@ -585,7 +585,7 @@ lwm2m_object_t * get_security_object(int serverId,
         targetP->publicIdLen = 0;
         targetP->secretKey = NULL;
         targetP->secretKeyLen = 0;
-#ifdef LWM2M_SUPPORT_OSCORE // todo change to LWM2M_ID_MAX
+#ifdef LWM2M_SUPPORT_OSCORE // todo change to LWM2M_MAX_ID
         targetP->oscoreInstance = 0;
 #endif
         if (bsPskId != NULL || psk != NULL)

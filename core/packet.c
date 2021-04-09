@@ -451,8 +451,9 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
 #endif
 
 #ifdef LWM2M_SUPPORT_OSCORE
-#ifdef LWM2M_CLIENT_MODE
     oscore_recipient_t * recipient = NULL;
+#ifdef LWM2M_CLIENT_MODE
+    
     peerP = utils_findServer(contextP, fromSessionH);
 #ifdef LWM2M_BOOTSTRAP
     if (peerP == NULL)
@@ -469,18 +470,23 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
 #else
     // todo add return code to lwm2m_result_callback_t to delete client if verifcation of endpointname fails
     peerP = utils_findClient(contextP, fromSessionH);
+    if(peerP != NULL){
+        recipient = peerP->recipient;
+    }
 #endif
+    oscore_message_t oscore_msg;
+    memset(&oscore_msg, 0, sizeof(oscore_message_t));
     if(coap_error_code == NO_ERROR) {
         int is_oscore = oscore_is_oscore_message(buffer, length);
         if(is_oscore == 1) {
-            oscore_message_t oscore_msg;
-            memset(&oscore_msg, 0, sizeof(oscore_message_t));
             oscore_msg.buffer = buffer;
             oscore_msg.length = length;
             oscore_msg.recipient = recipient;
 
             int oscore_ret = oscore_message_decrypt(&contextP->oscore, &oscore_msg);
             if(oscore_ret == 0) {
+                buffer = oscore_msg.buffer;
+                length = oscore_msg.length;
                 recipient = oscore_msg.recipient; // we will add recipient to client structure
             }
             else if(oscore_ret == OSCORE_REPLAY_DETECTED || oscore_ret == OSCORE_COULD_NOT_FIND_RECIPIENT) {
@@ -492,9 +498,14 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
             else { 
                 coap_error_code = COAP_500_INTERNAL_SERVER_ERROR;
             }
+
+            if(coap_error_code != NO_ERROR) {
+                oscore_msg.buffer = NULL;
+            }
             
         }
         else if(is_oscore == 0 && recipient != NULL) { // other endpoint should use OSCORE to encrypt messages
+            // todo react
             coap_error_code = UNAUTHORIZED_4_01;
         }
     }
@@ -630,6 +641,7 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
             {
 #ifdef LWM2M_SUPPORT_OSCORE
 #ifdef LWM2M_SERVER_MODE
+                multi_option_t * uriPath = message->uri_path;
                 // create client if not already happened to add oscore context for possible verifaction of endpointname
                 bool isRegistration = NULL != uriPath && URI_REGISTRATION_SEGMENT_LEN == uriPath->len && 0 == strncmp(URI_REGISTRATION_SEGMENT, (char *)uriPath->data, uriPath->len);
                 peerP = utils_findClient(contextP, fromSessionH);
@@ -860,7 +872,10 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
                         {
                             prv_send_get_next_block2(contextP, fromSessionH, peerP->blockData, message->mid, block2_num, block2_size);
                             transaction_handleResponse(contextP, fromSessionH, message, NULL);
+                            coap_error_code = COAP_NO_ERROR;
                         }
+
+                        
                     }
                 }
                 else if (message->code == COAP_413_ENTITY_TOO_LARGE)
@@ -903,6 +918,12 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
         coap_set_payload(message, coap_error_message, strlen(coap_error_message));
         message_send(contextP, message, fromSessionH, false);
     }
+
+#ifdef LWM2M_SUPPORT_OSCORE
+    if(oscore_msg.buffer != NULL) {
+        lwm2m_free(oscore_msg.buffer);
+    }
+#endif
 }
 
 

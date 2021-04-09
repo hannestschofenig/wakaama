@@ -438,11 +438,11 @@ static void test_oscore_context_backend_free_removes_SHA256() {
 }
 
 static void test_oscore_derive_context_test_vector1_client() {
-    uint8_t const masterSecret[] = {
+    uint8_t masterSecret[] = {
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
         0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
     };
-    uint8_t const masterSalt[] = {
+    uint8_t masterSalt[] = {
         0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40
     };
     
@@ -512,11 +512,11 @@ static void test_oscore_derive_context_test_vector1_client() {
 }
 
 static void test_oscore_derive_context_test_vector1_server() {
-    uint8_t const masterSecret[] = {
+    uint8_t masterSecret[] = {
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
         0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
     };
-    uint8_t const masterSalt[] = {
+    uint8_t masterSalt[] = {
         0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40
     };
     
@@ -586,7 +586,7 @@ static void test_oscore_derive_context_test_vector1_server() {
 }
 
 static void test_oscore_derive_context_test_vector2_client() {
-    uint8_t const masterSecret[] = {
+    uint8_t masterSecret[] = {
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
         0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
     };
@@ -659,7 +659,7 @@ static void test_oscore_derive_context_test_vector2_client() {
 }
 
 static void test_oscore_derive_context_test_vector2_server() {
-    uint8_t const masterSecret[] = {
+    uint8_t masterSecret[] = {
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
         0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
     };
@@ -732,11 +732,11 @@ static void test_oscore_derive_context_test_vector2_server() {
 }
 
 static void test_oscore_derive_context_test_vector3_client() {
-    uint8_t const masterSecret[] = {
+    uint8_t masterSecret[] = {
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
         0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
     };
-    uint8_t const masterSalt[] = {
+    uint8_t masterSalt[] = {
         0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40
     };
 
@@ -758,7 +758,7 @@ static void test_oscore_derive_context_test_vector3_client() {
     commonCtx.masterSecretLen = sizeof(masterSecret);
     commonCtx.masterSalt = masterSalt;
     commonCtx.masterSaltLen = sizeof(masterSalt);
-    commonCtx.idContext = idContext;
+    memcpy(commonCtx.idContext, idContext, sizeof(idContext));
     commonCtx.idContextLen = sizeof(idContext);
     commonCtx.senderIdLen = 0;
     commonCtx.recipientId[0] = 0x01;
@@ -812,11 +812,11 @@ static void test_oscore_derive_context_test_vector3_client() {
 }
 
 static void test_oscore_derive_context_test_vector3_server() {
-    uint8_t const masterSecret[] = {
+    uint8_t masterSecret[] = {
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
         0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10
     };
-    uint8_t const masterSalt[] = {
+    uint8_t masterSalt[] = {
         0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40
     };
 
@@ -838,7 +838,7 @@ static void test_oscore_derive_context_test_vector3_server() {
     commonCtx.masterSecretLen = sizeof(masterSecret);
     commonCtx.masterSalt = masterSalt;
     commonCtx.masterSaltLen = sizeof(masterSalt);
-    commonCtx.idContext = idContext;
+    memcpy(commonCtx.idContext, idContext, sizeof(idContext));
     commonCtx.idContextLen = sizeof(idContext);
     commonCtx.senderId[0] = 0x01;
     commonCtx.senderIdLen = 1;
@@ -930,6 +930,7 @@ static void test_oscore_message_test_vector4_request_client() {
 
     oscore_recipient_t recipient;
     memset(&recipient, 0, sizeof(oscore_recipient_t));
+    recipient.msgId = 0x5d1f;
     recipient.sender = &sender;
 
     oscore_message_t oscore_msg;
@@ -946,6 +947,7 @@ static void test_oscore_message_test_vector4_request_client() {
     };
 
     CU_ASSERT_EQUAL(oscore_message_encrypt(&ctx, &oscore_msg), 0);
+    CU_ASSERT_PTR_NOT_NULL(ctx.sentRequest);
     CU_ASSERT_EQUAL(oscore_msg.length, sizeof(expectedOscore));
     CU_ASSERT_ARRAY_EQUAL(oscore_msg.buffer, expectedOscore, sizeof(expectedOscore));
     OSCORE_FREE(oscore_msg.buffer);
@@ -996,6 +998,7 @@ static void test_oscore_message_test_vector5_request_client() {
 
     oscore_recipient_t recipient;
     memset(&recipient, 0, sizeof(oscore_recipient_t));
+    recipient.msgId = 0x71c3;
     recipient.sender = &sender;
 
     oscore_message_t oscore_msg;
@@ -1013,6 +1016,7 @@ static void test_oscore_message_test_vector5_request_client() {
     };
 
     CU_ASSERT_EQUAL(oscore_message_encrypt(&ctx, &oscore_msg), 0);
+    CU_ASSERT_PTR_NOT_NULL(ctx.sentRequest);
     CU_ASSERT_EQUAL(oscore_msg.length, sizeof(expectedOscore));
     CU_ASSERT_ARRAY_EQUAL(oscore_msg.buffer, expectedOscore, sizeof(expectedOscore));
     OSCORE_FREE(oscore_msg.buffer);
@@ -1065,6 +1069,7 @@ static void test_oscore_message_test_vector6_request_client() {
 
     oscore_recipient_t recipient;
     memset(&recipient, 0, sizeof(oscore_recipient_t));
+    recipient.msgId = 0x2f8e;
     recipient.sender = &sender;
 
     oscore_message_t oscore_msg;
@@ -1083,6 +1088,7 @@ static void test_oscore_message_test_vector6_request_client() {
     };
 
     CU_ASSERT_EQUAL(oscore_message_encrypt(&ctx, &oscore_msg), 0);
+    CU_ASSERT_PTR_NOT_NULL(ctx.sentRequest);
     CU_ASSERT_EQUAL(oscore_msg.length, sizeof(expectedOscore));
     CU_ASSERT_ARRAY_EQUAL(oscore_msg.buffer, expectedOscore, sizeof(expectedOscore));
     OSCORE_FREE(oscore_msg.buffer);
@@ -1135,12 +1141,22 @@ static void test_oscore_message_test_vector7_response_server() {
     memset(&oscore_msg, 0, sizeof(oscore_message_t));
     oscore_msg.buffer = serializedCoAP;
     oscore_msg.length = sizeof(serializedCoAP);
-    oscore_msg.partialIV[0] = 0x14;
-    oscore_msg.partialIVLen = 1;
 
     oscore_recipient_t recipient;
     memset(&recipient, 0, sizeof(oscore_recipient_t));
+    recipient.msgId = 0x5d1f;
     recipient.sender = &sender;
+
+    oscore_request_mapping_t * receivedRequest = (oscore_request_mapping_t*)OSCORE_MALLOC(sizeof(oscore_request_mapping_t));
+    memset(receivedRequest, 0, sizeof(oscore_request_mapping_t));
+    receivedRequest->partialIV[0] = 0x14;
+    receivedRequest->partialIVLen = 1;
+    receivedRequest->recipient = &recipient;
+    receivedRequest->token[2] = 0x39;
+    receivedRequest->token[3] = 0x74;
+    receivedRequest->tokenLen = 4;
+
+    ctx.receivedRequest = receivedRequest;
     oscore_msg.recipient = &recipient;
 
     uint8_t const expectedOscore[32] = {
@@ -1151,6 +1167,7 @@ static void test_oscore_message_test_vector7_response_server() {
     };
 
     CU_ASSERT_EQUAL(oscore_message_encrypt(&ctx, &oscore_msg), 0);
+    CU_ASSERT_PTR_NULL(ctx.receivedRequest);
     CU_ASSERT_EQUAL(oscore_msg.length, sizeof(expectedOscore));
 
     CU_ASSERT_ARRAY_EQUAL(oscore_msg.buffer, expectedOscore, sizeof(expectedOscore));
@@ -1208,9 +1225,19 @@ static void test_oscore_message_test_vector8_response_server() {
     oscore_recipient_t recipient;
     memset(&recipient, 0, sizeof(oscore_recipient_t));
     recipient.sender = &sender;
+    recipient.msgId = 0x5d1f;
     oscore_msg.recipient = &recipient;
-    oscore_msg.partialIV[0] = 0x14;
-    oscore_msg.partialIVLen = 1;
+
+    oscore_request_mapping_t * receivedRequest = (oscore_request_mapping_t*)OSCORE_MALLOC(sizeof(oscore_request_mapping_t));
+    memset(receivedRequest, 0, sizeof(oscore_request_mapping_t));
+    receivedRequest->partialIV[0] = 0x14;
+    receivedRequest->partialIVLen = 1;
+    receivedRequest->recipient = &recipient;
+    receivedRequest->token[2] = 0x39;
+    receivedRequest->token[3] = 0x74;
+    receivedRequest->tokenLen = 4;
+
+    ctx.receivedRequest = receivedRequest;
 
     // generate new partialIV
     oscore_msg.generatePartialIV = true;
@@ -1224,6 +1251,7 @@ static void test_oscore_message_test_vector8_response_server() {
     };
 
     CU_ASSERT_EQUAL(oscore_message_encrypt(&ctx, &oscore_msg), 0);
+    CU_ASSERT_PTR_NULL(ctx.receivedRequest);
     CU_ASSERT_EQUAL(oscore_msg.length, sizeof(expectedOscore));
 
     CU_ASSERT_ARRAY_EQUAL(oscore_msg.buffer, expectedOscore, sizeof(expectedOscore));
@@ -1497,8 +1525,9 @@ static void test_oscore_message_test_vector7_response_client_decrypt() {
     request->token[2] = 0x39;
     request->token[3] = 0x74;
     request->tokenLen = 4;
+    request->msgId = 0x5d1f;
 
-    ctx.request = request;
+    ctx.sentRequest = request;
     
 
     uint8_t oscoremsg[32] = {
@@ -1510,6 +1539,7 @@ static void test_oscore_message_test_vector7_response_client_decrypt() {
 
     oscore_msg.buffer = oscoremsg;
     oscore_msg.length = sizeof(oscoremsg);
+    oscore_msg.recipient = &recipient;
 
     CU_ASSERT_EQUAL(oscore_message_decrypt(&ctx, &oscore_msg), 0);
 
@@ -1520,7 +1550,7 @@ static void test_oscore_message_test_vector7_response_client_decrypt() {
         0x6f, 0x72, 0x6c, 0x64, 0x21
     };
     
-    CU_ASSERT_PTR_NULL(ctx.request);
+    CU_ASSERT_PTR_NULL(ctx.sentRequest);
     
     CU_ASSERT_EQUAL(oscore_msg.length, sizeof(expectedSerializedCoAP));
 
@@ -1581,8 +1611,9 @@ static void test_oscore_message_test_vector8_response_client_decrypt() {
     request->token[2] = 0x39;
     request->token[3] = 0x74;
     request->tokenLen = 4;
+    request->msgId = 0x5d1f;
 
-    ctx.request = request;
+    ctx.sentRequest = request;
     
 
     uint8_t oscoremsg[34] = {
@@ -1595,6 +1626,7 @@ static void test_oscore_message_test_vector8_response_client_decrypt() {
 
     oscore_msg.buffer = oscoremsg;
     oscore_msg.length = sizeof(oscoremsg);
+    oscore_msg.recipient = &recipient;
 
     CU_ASSERT_EQUAL(oscore_message_decrypt(&ctx, &oscore_msg), 0);
 
@@ -1605,7 +1637,7 @@ static void test_oscore_message_test_vector8_response_client_decrypt() {
         0x6f, 0x72, 0x6c, 0x64, 0x21
     };
     
-    CU_ASSERT_PTR_NULL(ctx.request);
+    CU_ASSERT_PTR_NULL(ctx.sentRequest);
     
     CU_ASSERT_EQUAL(oscore_msg.length, sizeof(expectedSerializedCoAP));
 
@@ -1613,6 +1645,94 @@ static void test_oscore_message_test_vector8_response_client_decrypt() {
 
     OSCORE_FREE(oscore_msg.buffer);
 
+    oscore_free(&ctx);
+}
+
+static void simple_leshan_decrypt() {
+    oscore_context_t ctx;
+    oscore_init(&ctx);
+    oscore_derived_context_t derivedCtx;
+    memset(&derivedCtx, 0, sizeof(oscore_derived_context_t));
+    oscore_recipient_t recipientCtx;
+    memset(&recipientCtx, 0, sizeof(oscore_recipient_t));
+    oscore_security_context_t securityCtx;
+    memset(&securityCtx, 0, sizeof(oscore_security_context_t));
+
+    uint8_t input[] = {
+    0x64, 0x44, 0x77, 0x33, 0x33, 0x77, 0x81, 0x13, 0x90, 0xff,
+    0xa6, 0x9a, 0x56, 0xa1, 0x81, 0x37, 0x47, 0x8d, 0xc9, 0x23,
+    0x78, 0x48, 0xf4, 0x57, 0x8e, 0x5c, 0x4f, 0x05, 0xd4, 0xd4,
+    0x7c, 0x00, 0x40
+    };
+
+    uint8_t const masterSecret[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10 
+    };
+    uint8_t const masterSalt[] = {
+        0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40 
+    };
+    oscore_common_context_t oscore_common_ctx;
+    memset(&oscore_common_ctx, 0, sizeof(oscore_common_context_t));
+    oscore_common_ctx.masterSecret = (uint8_t*) lwm2m_malloc(sizeof(masterSecret));
+    memcpy(oscore_common_ctx.masterSecret, masterSecret, sizeof(masterSecret));
+    oscore_common_ctx.masterSecretLen = sizeof(masterSecret);
+    //oscore_common_ctx.masterSalt = (uint8_t*) lwm2m_malloc(sizeof(masterSalt));
+    //memcpy(oscore_common_ctx.masterSalt, masterSalt, sizeof(masterSalt));
+    //oscore_common_ctx.masterSaltLen = sizeof(masterSalt);
+
+    oscore_common_ctx.senderId[0] = 0x00;
+    oscore_common_ctx.senderIdLen = 1;
+    oscore_common_ctx.recipientId[0] = 0x01;
+    oscore_common_ctx.recipientIdLen = 1;
+
+    oscore_common_ctx.hkdfAlgId.type = CN_CBOR_INT;
+    oscore_common_ctx.hkdfAlgId.v.sint = COSE_ALGO_HKDF_SHA_256;
+
+    oscore_common_ctx.aeadAlgId.type = CN_CBOR_UINT;
+    oscore_common_ctx.aeadAlgId.v.sint = COSE_ALGO_AES_CCM_16_64_128;
+
+    oscore_derive_context(&ctx, &oscore_common_ctx, &derivedCtx);
+    oscore_add_security_ctx(&ctx, &oscore_common_ctx, &derivedCtx, &securityCtx);
+    oscore_add_recipient_ctx(&ctx, &oscore_common_ctx, &derivedCtx, &securityCtx, &recipientCtx);
+
+    uint8_t const expectedSenderKey[16] = {
+        0x32, 0x1b, 0x26, 0x94, 0x32, 0x53, 0xc7, 0xff,
+        0xb6, 0x00, 0x3b, 0x0b, 0x64, 0xd7, 0x40, 0x41
+    };
+    uint8_t const expectedRecipientKey[16] = {
+        0xe5, 0x7b, 0x56, 0x35, 0x81, 0x51, 0x77, 0xcd,
+        0x67, 0x9a, 0xb4, 0xbc, 0xec, 0x9d, 0x7d, 0xda
+    };
+    uint8_t const expectedCommonIV[13] = {
+        0xbe, 0x35, 0xae, 0x29, 0x7d, 0x2d, 0xac, 0xe9,
+        0x10, 0xc5, 0x2e, 0x99, 0xf9
+    };
+
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.senderKey, expectedSenderKey, 16);
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.recipientKey, expectedRecipientKey, 16);
+    CU_ASSERT_ARRAY_EQUAL(derivedCtx.commonIV, expectedCommonIV, 13);
+
+    /*oscore_message_t oscore_msg;
+    oscore_msg.buffer = input;
+    oscore_msg.length = sizeof(input);
+    oscore_msg.recipient = &recipientCtx;
+
+    oscore_request_mapping_t * request = (oscore_request_mapping_t*)OSCORE_MALLOC(sizeof(oscore_request_mapping_t));
+    memset(request, 0, sizeof(oscore_request_mapping_t));
+    request->partialIV[0] = 0x00;
+    request->partialIVLen = 1;
+    request->token[0] = 0x4b;
+    request->token[1] = 0xcd;
+    request->token[2] = 0xa1;
+    request->token[3] = 0x07;
+    request->tokenLen = 4;
+    request->recipient = &recipientCtx;
+
+    ctx.sentRequest = request;
+
+    CU_ASSERT_EQUAL(oscore_message_decrypt(&ctx, &oscore_msg), 0);
+    */
     oscore_free(&ctx);
 }
 
@@ -1669,6 +1789,8 @@ static struct TestTable table[] = {
          { "[MSG] test vector 6 OSCORE Request, Server decrypt", test_oscore_message_test_vector6_request_server_decrypt },
          { "[MSG] test vector 7 OSCORE Response, Client decrypt", test_oscore_message_test_vector7_response_client_decrypt },
          { "[MSG] test vector 8 OSCORE Response, Client decrypt", test_oscore_message_test_vector8_response_client_decrypt },
+
+         {"leshan", simple_leshan_decrypt},
         { NULL, NULL },
 };
 

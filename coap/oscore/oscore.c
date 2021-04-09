@@ -1,6 +1,7 @@
 #include "oscore/oscore.h"
 #include "cose/cose_util.h"
 #include "er-coap-13/er-coap-13.h"
+#include <stdlib.h>
 #include "liblwm2m.h"
 #include <string.h>
 #include <assert.h>
@@ -85,7 +86,7 @@ static int oscore_option_itor_next(oscore_option_itor_t * itor) {
         pos += 2;
     }
     itor->option = itor->option + delta;
-    itor->valueLength = optionLength;
+    itor->valueLength = length;
     itor->value = pos;
     itor->nextOption = pos + length;
 
@@ -340,14 +341,14 @@ static oscore_request_mapping_t * oscore_internal_request_step(oscore_request_ma
     time_t now = time(NULL);
     oscore_request_mapping_t * itor = begin;
     while(itor != NULL){
-        if(itor->timeout > now) {
+        if(itor->timeout < now) {
             oscore_request_mapping_t * del = itor;
             itor = itor->next;
             begin = oscore_remove_request(begin, del);
             OSCORE_FREE(del);
         }
-        else if(now - itor->timeout < *timeoutP) {
-            *timeoutP = now - itor->timeout;
+        else if(itor->timeout - now < *timeoutP) {
+            *timeoutP = itor->timeout - now;
             itor = itor->next;
         }
         else{
@@ -706,10 +707,11 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
     uint16_t msgId = 0;
     ntworder((uint8_t*)&msgId, msg->buffer + 2, 2);
     coap_init_message(&coap_pkt, type, coap_code, msgId);
-    coap_init_message(&oscore, type, coap_code, msgId);
+    coap_init_message(&oscore, type, coap_code, msg->recipient->msgId++);
     uint8_t tokenLen = msg->buffer[0] & 0x0F;
     uint8_t * token = msg->buffer+4;
     coap_set_header_token(&oscore, token, tokenLen);
+    oscore_request_mapping_t * receivedRequest = NULL;
     oscore_request_mapping_t * request = NULL;
     // todo add support to OBSERVE option
 
@@ -719,6 +721,8 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
     }
 
     if(!isResponse || msg->generatePartialIV) { // partial IV must be calculated
+        //if we find a request, we transmit a retransmission
+        request = oscore_find_request(ctx->sentRequest, token, tokenLen, msg->recipient);
         memset(piv, 0, 8);
         oscore_internal_u64_to_partialIV(sender->senderSequenceNumber, piv, &(piv_len));
         if(sender->senderSequenceNumber == 0){
@@ -726,12 +730,12 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
         }
     }
     if(isResponse) {
-        request = oscore_find_request(ctx->receivedRequest, token, tokenLen, msg->recipient);
-        if(request == NULL) {
+        receivedRequest = oscore_find_request(ctx->receivedRequest, token, tokenLen, msg->recipient);
+        if(receivedRequest == NULL) {
             LOG("Could not find recipient");
             return OSCORE_COULD_NOT_FIND_RECIPIENT;
         }
-        ctx->receivedRequest = oscore_remove_request(ctx->receivedRequest, request);
+        ctx->receivedRequest = oscore_remove_request(ctx->receivedRequest, receivedRequest);
     }
     
     uint8_t nonce[OSCORE_MAXNONCELEN];
@@ -740,23 +744,23 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
         ret = oscore_derive_nonce(sender->senderId, sender->senderIdLen, sender->commonIV, sender->nonceLen, piv, piv_len, nonce);
     }
     else { // use recipient id
-        ret = oscore_derive_nonce(msg->recipient->recipientId, msg->recipient->recipientIdLen, sender->commonIV, sender->nonceLen, request->partialIV, request->partialIVLen, nonce);
+        ret = oscore_derive_nonce(msg->recipient->recipientId, msg->recipient->recipientIdLen, sender->commonIV, sender->nonceLen, receivedRequest->partialIV, receivedRequest->partialIVLen, nonce);
     }
     
     if(ret < 0) {
-        OSCORE_FREE(request);
+        OSCORE_FREE(receivedRequest);
         return -1;
     }
 
     cose_aead_alg_t * aead = cose_aead_algorithm_find(&ctx->cose, sender->aeadAlgId);
     if(aead == NULL){
-        OSCORE_FREE(request);
+        OSCORE_FREE(receivedRequest);
         LOG("aead algorithm not defined");
         return -1;
     }
     
     if(aead->keyLen != sender->senderKeyLen || aead->nonceMin != sender->nonceLen) {
-        OSCORE_FREE(request);
+        OSCORE_FREE(receivedRequest);
         LOG("invalid security context with aead algorithm");
         return -1;
     }
@@ -768,7 +772,7 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
             if(coap_parse_option(&coap_pkt, itor.option, (uint8_t*)itor.value, itor.valueLength)!= NO_ERROR) {
                 coap_free_header(&oscore);
                 coap_free_header(&coap_pkt);
-                OSCORE_FREE(request);
+                OSCORE_FREE(receivedRequest);
                 LOG("Invalid CoAP option");
                 return -1;
             }
@@ -776,14 +780,14 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
         else if(itor.option == COAP_OPTION_OSCORE) {
             coap_free_header(&oscore);
             coap_free_header(&coap_pkt);
-            OSCORE_FREE(request);
+            OSCORE_FREE(receivedRequest);
             LOG("OSCORE option in CoAP message found");
             return -1;
         }
         else if(coap_parse_option(&oscore, itor.option, (uint8_t*)itor.value, itor.valueLength) != NO_ERROR) {
             coap_free_header(&oscore);
             coap_free_header(&coap_pkt);
-            OSCORE_FREE(request);
+            OSCORE_FREE(receivedRequest);
             LOG("Invalid CoAP Option");
             return -1;
         }
@@ -792,7 +796,7 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
     if(ret != 0) {
         coap_free_header(&oscore);
         coap_free_header(&coap_pkt);
-        OSCORE_FREE(request);
+        OSCORE_FREE(receivedRequest);
         LOG("Invalid CoAP message");
         return -1;
     }
@@ -806,7 +810,7 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
     int sizeCoap = ret;
 
     if(isResponse) {
-        ret = oscore_additional_authenticated_data_serialize(NULL, 0, sender->aeadAlgId, msg->recipient->recipientId, msg->recipient->recipientIdLen, request->partialIV, request->partialIVLen);
+        ret = oscore_additional_authenticated_data_serialize(NULL, 0, sender->aeadAlgId, msg->recipient->recipientId, msg->recipient->recipientIdLen, receivedRequest->partialIV, receivedRequest->partialIVLen);
     }
     else {
         ret = oscore_additional_authenticated_data_serialize(NULL, 0, sender->aeadAlgId, sender->senderId, sender->senderIdLen, piv, piv_len);
@@ -816,7 +820,7 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
     if(ret <= 0) {
         coap_free_header(&oscore);
         coap_free_header(&coap_pkt);
-        OSCORE_FREE(request);
+        OSCORE_FREE(receivedRequest);
         LOG("Could not serialize AAD");
         return -1;
     }
@@ -826,7 +830,7 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
     if(aad == NULL) {
         coap_free_header(&oscore);
         coap_free_header(&coap_pkt);
-        OSCORE_FREE(request);
+        OSCORE_FREE(receivedRequest);
         LOG("Out of memory");
         return -1;
     }
@@ -834,19 +838,20 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
     if(serializedCoap == NULL){
         coap_free_header(&oscore);
         coap_free_header(&coap_pkt);
-        OSCORE_FREE(request);
+        OSCORE_FREE(receivedRequest);
         LOG("Out of memory");
         OSCORE_FREE(aad);
         return -1;
     }
 
     if(isResponse) {
-        aadLen = oscore_additional_authenticated_data_serialize(aad, aadLen, sender->aeadAlgId, msg->recipient->recipientId, msg->recipient->recipientIdLen, request->partialIV, request->partialIVLen);
+        aadLen = oscore_additional_authenticated_data_serialize(aad, aadLen, sender->aeadAlgId, msg->recipient->recipientId, msg->recipient->recipientIdLen, receivedRequest->partialIV, receivedRequest->partialIVLen);
+        OSCORE_FREE(receivedRequest);
     }
     else {
         aadLen = oscore_additional_authenticated_data_serialize(aad, aadLen, sender->aeadAlgId, sender->senderId, sender->senderIdLen, piv, piv_len);
     }
-    OSCORE_FREE(request);
+    
     
     sizeCoap = coap_serialize_message(&coap_pkt, serializedCoap);
     coap_free_header(&coap_pkt);
@@ -905,6 +910,9 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
             senderIdLen = sender->senderIdLen;
         }
         coap_set_header_oscore(&oscore, piv, piv_len, sender->idContext, sender->idContextLen, senderId, senderIdLen);
+        if(request != NULL) {
+            request->timeout = time(NULL) + COAP_MAX_RTT;
+        }
         sender->senderSequenceNumber++;
     }
     
@@ -920,7 +928,7 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
     sizeCoap = coap_serialize_message(&oscore, oscore_out);
     coap_free_header(&oscore);
     OSCORE_FREE(out);
-    if(!isResponse) {
+    if(!isResponse && request == NULL) {
         oscore_request_mapping_t * mapping = (oscore_request_mapping_t*)OSCORE_MALLOC(sizeof(oscore_request_mapping_t));
         if(mapping == NULL){
             LOG("Out of memory");
@@ -933,6 +941,7 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
         mapping->partialIVLen = piv_len;
         mapping->tokenLen = tokenLen;
         mapping->timeout = time(NULL) + COAP_MAX_RTT;
+        mapping->msgId = msgId; // save msgId used by coap
         mapping->next = ctx->sentRequest;
         ctx->sentRequest = mapping;
     }
@@ -975,7 +984,7 @@ int oscore_add_recipient_ctx(oscore_context_t * ctx, oscore_common_context_t con
     recipient->recipientIdLen = commonCtx->recipientIdLen;
     recipient->recipientKey = derivedCtx->recipientKey;
     recipient->recipientKeyLen = derivedCtx->keyLen;
-
+    recipient->msgId = time(NULL) + rand();
     recipient->next = ctx->recipient;
     ctx->recipient = recipient;
 
@@ -1268,6 +1277,8 @@ int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg) {
 
     if(isResponse) {
         ctx->sentRequest = oscore_remove_request(ctx->sentRequest, request);
+        // set back correct message id
+        packet.mid = request->msgId;
         OSCORE_FREE(request);
     }
     

@@ -129,12 +129,15 @@ typedef struct oscore_recipient {
     uint8_t const * recipientKey;
     size_t recipientKeyLen;
 
+    uint16_t msgId;
+
 } oscore_recipient_t;
 
 typedef struct oscore_request_mapping {
     struct oscore_request_mapping * next;
     oscore_recipient_t * recipient;
     time_t timeout;
+    uint16_t msgId;
     uint8_t token[8];
     uint8_t partialIV[8];
     uint8_t partialIVLen;

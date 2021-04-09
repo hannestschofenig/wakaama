@@ -73,6 +73,9 @@
 
 #include "commandline.h"
 #include "connection.h"
+#ifdef LWM2M_SUPPORT_OSCORE
+#include "oscore/oscore.h"
+#endif
 
 #define MAX_PACKET_SIZE 2048
 
@@ -1091,6 +1094,79 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+#ifdef LWM2M_SUPPORT_OSCORE
+    uint8_t const masterSecret[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10 
+    };
+    uint8_t const masterSalt[] = {
+        0x9e, 0x7c, 0xa9, 0x22, 0x23, 0x78, 0x63, 0x40 
+    };
+    oscore_common_context_t oscore_common_ctx;
+    memset(&oscore_common_ctx, 0, sizeof(oscore_common_context_t));
+    oscore_common_ctx.masterSecret = (uint8_t*) lwm2m_malloc(sizeof(masterSecret));
+    if(oscore_common_ctx.masterSecret == NULL) {
+        fprintf(stderr, "Failed to create OSCORE security\r\n");
+        return -1;
+    }
+    memcpy(oscore_common_ctx.masterSecret, masterSecret, sizeof(masterSecret));
+    oscore_common_ctx.masterSecretLen = sizeof(masterSecret);
+    //oscore_common_ctx.masterSalt = (uint8_t*) lwm2m_malloc(sizeof(masterSalt));
+    //if(oscore_common_ctx.masterSalt == NULL) {
+    //    fprintf(stderr, "Failed to create OSCORE security\r\n");
+    //    return -1;
+    //}
+    //memcpy(oscore_common_ctx.masterSalt, masterSalt, sizeof(masterSalt));
+    //oscore_common_ctx.masterSaltLen = sizeof(masterSalt);
+
+    oscore_common_ctx.senderId[0] = 0x01;
+    oscore_common_ctx.senderIdLen = 1;
+    oscore_common_ctx.recipientId[0] = 0x00;
+    oscore_common_ctx.recipientIdLen = 1;
+
+    oscore_common_ctx.hkdfAlgId.type = CN_CBOR_INT;
+    oscore_common_ctx.hkdfAlgId.v.sint = COSE_ALGO_HKDF_SHA_256;
+
+    oscore_common_ctx.aeadAlgId.type = CN_CBOR_UINT;
+    oscore_common_ctx.aeadAlgId.v.sint = COSE_ALGO_AES_CCM_16_64_128;
+
+    oscore_derived_context_t * derivedCtx = (oscore_derived_context_t*)lwm2m_malloc(sizeof(oscore_derived_context_t));
+    if(derivedCtx == NULL) {
+        return 0;
+    }
+    oscore_recipient_t * recipientCtx = (oscore_recipient_t*)lwm2m_malloc(sizeof(oscore_recipient_t));
+    if(recipientCtx == NULL){
+        lwm2m_free(derivedCtx);
+        return 0;
+    }
+    oscore_security_context_t * securityCtx = (oscore_security_context_t*)lwm2m_malloc(sizeof(oscore_security_context_t));
+    if(recipientCtx == NULL){
+        lwm2m_free(derivedCtx);
+        lwm2m_free(recipientCtx);
+        return 0;
+    }
+
+    if(oscore_derive_context(&lwm2mH->oscore, &oscore_common_ctx, derivedCtx) != 0) {
+        lwm2m_free(derivedCtx);
+        lwm2m_free(recipientCtx);
+        lwm2m_free(securityCtx);
+        return 0;
+    }
+
+    if(oscore_add_security_ctx(&lwm2mH->oscore, &oscore_common_ctx, derivedCtx, securityCtx) != 0){
+        lwm2m_free(derivedCtx);
+        lwm2m_free(recipientCtx);
+        lwm2m_free(securityCtx);
+        return 0;
+    }
+    if(oscore_add_recipient_ctx(&lwm2mH->oscore, &oscore_common_ctx, derivedCtx, securityCtx, recipientCtx) != 0) {
+        lwm2m_free(derivedCtx);
+        lwm2m_free(recipientCtx);
+        lwm2m_free(securityCtx);
+        return 0;
+    }
+#endif
+
     signal(SIGINT, handle_sigint);
 
     for (i = 0 ; commands[i].name != NULL ; i++)
@@ -1100,12 +1176,12 @@ int main(int argc, char *argv[])
     fprintf(stdout, "> "); fflush(stdout);
 
     lwm2m_set_monitoring_callback(lwm2mH, prv_monitor_callback, lwm2mH);
-
     while (0 == g_quit)
     {
         FD_ZERO(&readfds);
         FD_SET(sock, &readfds);
         FD_SET(STDIN_FILENO, &readfds);
+        
 
         tv.tv_sec = 60;
         tv.tv_usec = 0;
@@ -1188,10 +1264,10 @@ int main(int argc, char *argv[])
             else if (FD_ISSET(STDIN_FILENO, &readfds))
             {
                 numBytes = read(STDIN_FILENO, buffer, MAX_PACKET_SIZE - 1);
-
                 if (numBytes > 1)
                 {
                     buffer[numBytes] = 0;
+                    fprintf(stdout, "command: %s\r\n", buffer);
                     handle_command(commands, (char*)buffer);
                     fprintf(stdout, "\r\n");
                 }
