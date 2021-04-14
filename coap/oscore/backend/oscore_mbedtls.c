@@ -2,6 +2,9 @@
 #include "mbedtls/hkdf.h"
 #include <string.h>
 
+#ifdef LWM2M_SUPPORT_OSCORE
+
+
 #define MBEDTLS_ALGORITHMS 1
 
 /*mbedtls_sha256_info*/
@@ -40,3 +43,5 @@ void oscore_backend_free(oscore_context_t * ctx) {
         oscore_hkdf_algorithm_rm(ctx, &mbedtls_hkdfs[i].id, NULL);
     }
 }
+
+#endif

@@ -22,6 +22,8 @@ static cose_error_t mbedtls_aes_ccm_16_64_128_encrypt(cose_aead_parameters_t con
                          par->aadEncoded, par->aadLen,
                          par->plaintext, output,
                          output+par->plaintextLen, 8);
+
+    mbedtls_ccm_free(&ccmCtx);
     if(ret == 0){
         return COSE_OK;
     }
@@ -41,6 +43,8 @@ static cose_error_t mbedtls_aes_ccm_16_64_128_decrypt(cose_aead_parameters_t * p
                          par->aadEncoded, par->aadLen,
                          encryptedBuffer, par->plaintext,
                          encryptedBuffer + length - 8, 8);
+
+    mbedtls_ccm_free(&ccmCtx);
     if(ret == 0){
         return COSE_OK;
     }

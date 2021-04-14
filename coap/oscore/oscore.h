@@ -6,6 +6,8 @@
 #include "cn-cbor/cn-cbor.h"
 #include "oscore/oscore_config.h"
 
+#ifdef LWM2M_SUPPORT_OSCORE
+
 #define OSCORE_PARTIALIV_MAXLEN 5
 #define OSCORE_SENDERSEQUENCENUMBER_MAX (uint64_t)((uint64_t)(1) << 40)
 #define OSCORE_OPTION_VALUE_MAXLEN 255
@@ -236,4 +238,8 @@ int oscore_is_oscore_message(uint8_t const * buffer, size_t length);
 // msg->buffer is allocated with OSCORE_MALLOC
 // todo if recipient is set in msg only this recipient to decrypt
 int oscore_message_decrypt(oscore_context_t * ctx, oscore_message_t * msg);
+
+
+#endif
+
 #endif

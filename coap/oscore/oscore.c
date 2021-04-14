@@ -675,8 +675,8 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
         return -1;
     }
     
-    uint8_t piv[OSCORE_PARTIALIV_MAXLEN];
-    memset(piv,0,OSCORE_PARTIALIV_MAXLEN);
+    uint8_t piv[sizeof(uint64_t)];
+    memset(piv,0,sizeof(uint64_t));
     size_t piv_len = 0;
     oscore_security_context_t * sender = msg->recipient->sender;
 
@@ -716,7 +716,7 @@ int oscore_message_encrypt(oscore_context_t * ctx, oscore_message_t * msg) {
     if(!isResponse || msg->generatePartialIV) { // partial IV must be calculated
         //if we find a request, we transmit a retransmission
         request = oscore_find_request(ctx->sentRequest, token, tokenLen, msg->recipient);
-        memset(piv, 0, 8);
+        memset(piv, 0, sizeof(uint64_t));
         oscore_internal_u64_to_partialIV(sender->senderSequenceNumber, piv, &(piv_len));
         if(sender->senderSequenceNumber == 0){
             piv_len = 1;
