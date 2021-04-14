@@ -505,8 +505,14 @@ void lwm2m_handle_packet(lwm2m_context_t * contextP,
             
         }
         else if(is_oscore == 0 && recipient != NULL) { // other endpoint should use OSCORE to encrypt messages
-            // todo react
-            coap_error_code = UNAUTHORIZED_4_01;
+            coap_error_code = coap_parse_message(message, buffer, (uint16_t)length);
+            if(coap_error_code == COAP_NO_ERROR && (message->code == COAP_401_UNAUTHORIZED || message->code == COAP_400_BAD_REQUEST || message->code == COAP_500_INTERNAL_SERVER_ERROR)) {
+                // other endpoint could not authorize or has internal error
+                coap_error_code = COAP_IGNORE;
+            }
+            else if(coap_error_code == COAP_NO_ERROR) { // unexpected coap message
+                coap_error_code = COAP_401_UNAUTHORIZED;
+            }
         }
     }
     

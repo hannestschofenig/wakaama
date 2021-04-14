@@ -643,27 +643,20 @@ static coap_option_t oscore_internal_get_next_EOption(coap_packet_t * packet) {
 }
 
 static void oscore_internal_u64_to_partialIV(uint64_t v, uint8_t * partialIV, size_t * partialIVLen) {
-#ifdef LWM2M_BIG_ENDIAN
-    uint8_t * ptr = (uint8_t*)&v;
-    int i = 0;
     *partialIVLen = 0;
+#ifdef LWM2M_BIG_ENDIAN
+    memcpy(partialIV, &v, sizeof(uint64_t));
+#else
+    ntworder(partialIV, &v, sizeof(uint64_t));
+#endif
+    size_t i = 0;
     while(i < sizeof(uint64_t) && *partialIVLen == 0) {
-        if(ptr[i] != 0) {
+        if(partialIV[i] != 0) {
             *partialIVLen = sizeof(uint64_t) - i;
         }
         i++;
     }
-    memcpy(partialIV, ptr+sizeof(uint64_t)-*partialIVLen, *partialIVLen);
-#else
-    ntworder(partialIV, &v, 8);
-    for(int i = 7; i >= 0; i--) {
-        if(partialIV[i] != 0) {
-            *partialIVLen = 8 - i;
-            i = -1;
-        }
-    }
-    memmove(partialIV, partialIV+8-*partialIVLen, *partialIVLen);
-#endif
+    memmove(partialIV, partialIV+sizeof(uint64_t)-*partialIVLen, *partialIVLen);
 }
 
 static void oscore_internal_u64_from_partialIV(uint64_t * v, uint8_t const * partialIV, size_t partialIVLen) {
